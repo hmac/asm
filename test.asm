@@ -1,5 +1,6 @@
 ; macOS expects position-independent code
-default rel
+; see https://www.nasm.us/doc/nasmdoc7.html#section-7.2
+DEFAULT REL
 
 global _main
 
@@ -7,14 +8,17 @@ section .data
   hello:
     db "hello", 10, 0
   uintformat:
-    db "%u", 0
+    db "%lu", 0
   newline:
     db "\n", 0
+  numbers:
+    db 1721d, 979d, 366d, 299d, 675d, 1456d
+  numbers2:
+    db 2550000000d
 
 section .text
 
 extern _printf
-
 
   _main:
     ; C calling convention
@@ -31,58 +35,68 @@ extern _printf
     ; we then pushed rbp, rbx, rdi and rsi (32)
     ; so the stack is at 40, which is not a 16 byte boundary
     ; we extend it by another 8 (48) to get a 16 byte boundary
-
     sub rsp, 8
-    lea rdi, [rel hello]
-    call _printf
+
+    ; a loop that assembles each pair of numbers from a list
+    ; how do we represent the list?
+    ; put each number on the stack
+
+    ; we have two indices into the stack for the two numbers
+    ; we have two loops, one for each index, from 0-len(list)
+    ; on each inner loop we check if the numbers sum to 2020
+    ; if they do, we multiply them together and jump
+
+    ; TODO: set up numbers in stack
+
+    lea rsi, [numbers2]
+    mov rsi, [rsi]
+    call putint
+    jmp end
+
+    ; indices
+    ; rbx = 0 .. len(list)
+    ; r12 = 0 .. len(list)
+    mov rbx, 0
+loop1:
+
+    mov r12, 0
+loop2:
+    ; TODO: check this pair of numbers 
+
+    ; here's where we do the work
+    ; look up each number
+    lea r13, [numbers]
+    ;add r13, rbx
+    lea r14, [numbers]
+    ;add r14, r12
+    add r14, 1
+    
+    mov rsi, [r13]
+    call putint
+    mov rsi, [r14]
+    call putint
+    
+    ; increment the inner counter (r12)
+    add r12, 1
+
+    ; check if the inner loop has completed
+    cmp r12, 1
+    jne loop2
+
+    ; increment the outer counter (rbx)
+    add rbx, 1
+
+    ; check if the outer loop has completed
+    cmp rbx, 1
+    jne loop1
+
+end:
+    ; assume that rbx and r12 point to the indices of the answer
+    ; TODO: multiple them together
+    ;       and print the result
 
     ; now restore the stack pointer
     add rsp, 8
-
-    ; let's calculate the 10th fibonacci number
-    ; we need five registers
-    ; these are picked because they're preserved by any called functions
-    ; rbx = n-1
-    ; r12 = n
-    ; r14 = scratch
-    ; r15 = counter
-    ; rbx = 0, r12 = 1, r15 = 0
-    mov rbx, 0
-    mov r12, 1
-    mov r15, 0
-
-    ; rbx | r12 | r14 | r15
-    ;
-    ;  0  |  1  |  -  |  1
-    ;  1  |  1  |  1  |  2
-    ;  1  |  2  |  1  |  3
-    ;  2  |  3  |  2  |  4
-    ;  3  |  5  |  3  |  5
-    ;  5  |  8  |  5  |  6
-    ;     |     |     |   
-    ;  1  |  1  |  1  |  3
-    ;  1  |  1  |  1  |  4
-    ;     |     |  2  |   
-    ;     |     |     |   
-
-    ; set r14 = r12
-    ; set r12 = r12 + rbx
-    ; set rbx = r14
-    ; increment r15
-_0: mov r14, r12
-    add r12, rbx
-    mov rbx, r14
-    add r15, 1
-
-    ; if r15 is less than 30, jump to the start of the loop
-    cmp r15, 30
-    jl _0
-
-    ; print r14
-    mov rsi, r14
-    call putint
-
-    mov rax, r13
 
     ; restore the saved registers by popping them from the stack
     ; I think this automatically puts the value at the stack address back into
@@ -113,11 +127,11 @@ _0: mov r14, r12
 
     ; our format string is stored under the label uintformat so we put that
     ; address in rdi
-    lea rdi, [rel uintformat]
+    lea rdi, [uintformat]
 
-    add rsp, 8
+    ; add rsp, 8
     call _printf
-    sub rsp, 8
+    ; sub rsp, 8
 
     pop rbp
     ret
