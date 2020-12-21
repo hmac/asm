@@ -1,4 +1,8 @@
 ; vim:ft=nasm
+
+; useful references:
+; https://www.cs.uaf.edu/2017/fall/cs301/reference/x86_64.html
+
 ; macOS expects position-independent code
 ; see https://www.nasm.us/doc/nasmdoc7.html#section-7.2
 DEFAULT REL
@@ -22,79 +26,46 @@ section .text
 _main:
             push rbp                  ; push the base pointer onto the stack
             mov rbp, rsp              ; move the stack pointer into the base pointer register
-            push rbx                  ; save registers that the callee may be relying on
 
-                                      ; the stack pointer must be aligned on a 16 byte boundary when
-                                      ; calling an external function.  entering main pushed the return
-                                      ; address onto the stack (8) we then pushed rbp and rbx (16) so the
-                                      ; stack is at 24, which is not a 16 byte boundary we extend it by
-                                      ; another 8 (32) to get a 16 byte boundary
+                                      ; save registers that the callee may be relying on
+            push rbx
+            push r12
+            push r13
+            push r14
+            push r15
+
+                                      ; The stack pointer must be aligned on a 16 byte boundary when
+                                      ; calling an external function.  entering main pushed the
+                                      ; return address onto the stack (8) we then pushed 6 registers
+                                      ; (48) so the stack is at 56, which is not a 16 byte boundary.
+                                      ; We extend it by another 8 (64) to get a 16 byte boundary
             sub rsp, 8
 
-                                      ; we have two pointers into an array of numbers in the data segment
-                                      ; called 'numbers'.  we have two loops, one for each pointer, from
-                                      ; the start of the array to the end the numbers are 64 bit, so at
-                                      ; the end of each loop we increment the pointer by 8 on each inner
-                                      ; loop we check if the numbers sum to 2020 if they do, we multiply
-                                      ; them together and jump
-
-                                      ; we use rbx and r12 for the outer and inner loop
-                                      ; pointers, respectively
-            lea rbx, [numbers]
-main_loop1:
-            lea r12, [numbers]
-main_loop2:
-            mov r15d, [rbx]           ; sum the two numbers together
-            add r15d, [r12]
-
-            cmp r15d, 2020            ; if the sum is equal to 2020, jump to the end
-            je main_end
-
-                                      ; increment the inner counter (r12)
-            add r12, 4
-
-                                      ; check if the inner loop has completed
-            lea r15, [numbers]
-            add r15, (200*4)
-            cmp r12, r15
-            jne main_loop2
-
-                                      ; increment the outer counter (rbx)
-            add rbx, 4
-
-                                      ; check if the outer loop has completed
-            mov r15, numbers
-            add r15, (200*4)
-            cmp rbx, r15
-            jne main_loop1
-main_end:
-                              ; rbx and r12 will now be pointing to the two
-                              ; numbers that sum to 2020
-
-            mov rsi, [rbx]            ; print the first number (rbx)
+            call part1                ; calculate the answer to the first part
+            mov rsi, rax              ; print it
             call putint
-            mov rdi, newline
-            call _printf
-            mov rsi, [r12]            ; print the second number (r12)
-            call putint
+
             mov rdi, newline
             call _printf
 
-            mov r13, [rbx]            ; multiply them together
-            imul r13, [r12]
-
-            mov rsi, r13              ; print the product
+            call part2                ; calculate the answer to the second part
+            mov rsi, rax              ; print it
             call putint
-
-
 
             add rsp, 8                ; now restore the stack pointer
+
+                                      ; restore the registers we saved at the start
+            pop r15
+            pop r14
+            pop r13
+            pop r12
+
             pop rbx                   ; restore rbx
             pop rbp                   ; restore the base pointer
             mov rax, 0                ; set exit code to 0
             ret                       ; exit
 
-; this routine expects a 64 bit integer to be in rsi
+; this routine expects a 32 bit integer to be in rsi
 ; it will print it to stdout
 ; we assume the stack is 16-byte aligned
 putint:
@@ -114,3 +85,80 @@ putint:
             pop rbp
             ret
 
+; part1(): returns the product of the two numbers which sum to 2020
+; this function doesn't use the stack or any preserved registers so we don't need
+; to do the usual saving of registers
+part1:
+                                      ; we will use rax, rcx and rdx
+                                      ; rax and rcx point to numbers in the array
+                                      ; rdx will be used as a general scratch register
+                                      ; (when we need only half of rdx we refer to it as edx)
+            mov rax, numbers
+part1_1:
+            mov rcx, numbers
+part1_2:
+            mov edx, [rax]
+            add edx, [rcx]           ; sum the two numbers together
+
+            cmp edx, 2020            ; if the sum is equal to 2020, jump to the end
+            je part1_end
+
+                                      ; increment the inner counter (rcx)
+            add rcx, 4
+
+                                      ; check if the inner loop has completed
+            lea rdx, [numbers]
+            add rdx, (200*4)
+            cmp rcx, rdx
+            jne part1_2
+
+                                      ; increment the outer counter (rax)
+            add rax, 4
+
+                                      ; check if the outer loop has completed
+            mov rdx, numbers
+            add rdx, (200*4)
+            cmp rax, rdx
+            jne part1_1
+part1_end:
+                                      ; rax and rcx will now be pointing to the two
+                                      ; numbers that sum to 2020
+
+            mov rax, [rax]
+            imul rax, [rcx]           ; multiply them together, store the result in rax
+
+            ret                       ; exit
+
+; part2(): returns the product of the three numbers which sum to 2020
+part2:
+                                      ; We'll use rax, rcx and rdx for pointers into the numbers
+                                      ; array. rsi will be our scratch register.
+                                      ; r8 will hold a pointer to the end of the array
+            mov r8, numbers + (200*4)
+            mov rax, numbers
+part2_1:
+            mov rcx, numbers
+part2_2:
+            mov rdx, numbers
+part2_3:
+            mov esi, [rax]
+            add esi, [rcx]
+            add esi, [rdx]
+            cmp esi, 2020
+            je part2_end
+
+            add rdx, 4
+            cmp rdx, r8
+            jne part2_3
+            add rcx, 4
+            cmp rcx, r8
+            jne part2_2
+            add rax, 4
+            cmp rax, r8
+            jne part2_1
+
+part2_end:
+            mov rax, [rax]
+            imul rax, [rcx]
+            imul rax, [rdx]
+            ret
