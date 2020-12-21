@@ -5,14 +5,16 @@ DEFAULT REL
 global _main
 
 section .data
-  hello:
-    db "hello", 10, 0
   uintformat:
-    db "%lu", 0
+    db "%u", 0
   newline:
     db `\n`, 0
+  space:
+    db ' ', 0
+  hello:
+    db "hello", 10, 0
   numbers:
-    db qword 1721d, 979d, 366d, 299d, 675d, 1456d
+    db dword %(1721d, 979d, 366d, 299d, 675d, 1456d)
 
 section .text
 
@@ -51,64 +53,76 @@ loop1:
 
     lea r12, [numbers]
 loop2:
-    ; TODO: check this pair of numbers
 
-    ; here's where we do the work
-    ; look up each number
-
-    mov rsi, [rbx]
-    call putint
-
-    mov rdi, newline
-    call _printf
-
-    mov rsi, [r12]
-    call putint
-
-    mov rdi, newline
-    call _printf
 
     ; check if these two numbers sum to 2020
     mov r15, 0
     add r15, [rbx]
     add r15, [r12]
+
+    mov rsi, [rbx]
+    call putint
+
+    mov rdi, space
+    call _printf
+
+    mov rsi, [r12]
+    call putint
+
+    mov rdi, space
+    call _printf
+
+    push r15
+    lea rsi, [rsp+8]
+    sub rsp, 8
+    call putint
+    add rsp, 8
+    pop r15
+
+    mov rdi, newline
+    call _printf
+
     ;mov rsi, r15
     ;call putint
     cmp r15, 2020
     je end
 
     ; increment the inner counter (r12)
-    add r12, 8
+    add r12, 4
 
     ; check if the inner loop has completed
-    mov r15, numbers
-    add r15, (6*8)
+    lea r15, [numbers]
+    add r15, (6*4)
     cmp r12, r15
     jne loop2
 
     ; increment the outer counter (rbx)
-    add rbx, 8
+    add rbx, 4
 
     ; check if the outer loop has completed
     mov r15, numbers
-    add r15, (6*8)
+    add r15, (6*4)
     cmp rbx, r15
     jne loop1
 
 end:
     ; assume that rbx and r12 point to the indices of the answer
 
-    ;mov rsi, [rbx]
-    ;call putint
-    ;mov rsi, [r12]
-    ;call putint
+    mov rsi, [rbx]
+    call putint
+    mov rdi, newline
+    call _printf
+    mov rsi, [r12]
+    call putint
+    mov rdi, newline
+    call _printf
 
     ; multiply them together
     mov r13, [rbx]
     imul r13, [r12]
 
     mov rsi, r13
-    ;call putint
+    call putint
 
     mov rax, r13
 
