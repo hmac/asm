@@ -10,11 +10,9 @@ section .data
   uintformat:
     db "%lu", 0
   newline:
-    db "\n", 0
+    db `\n`, 0
   numbers:
-    db 1721d, 979d, 366d, 299d, 675d, 1456d
-  numbers2:
-    db 2550000000d
+    db qword 1721d, 979d, 366d, 299d, 675d, 1456d
 
 section .text
 
@@ -41,59 +39,79 @@ extern _printf
     ; how do we represent the list?
     ; put each number on the stack
 
-    ; we have two indices into the stack for the two numbers
-    ; we have two loops, one for each index, from 0-len(list)
+    ; we have two pointers into an array of numbers in the data segment called 'numbers'.
+    ; we have two loops, one for each pointer, from the start of the array to the end
+    ; the numbers are 64 bit, so at the end of each loop we increment the pointer by 8
     ; on each inner loop we check if the numbers sum to 2020
     ; if they do, we multiply them together and jump
 
-    ; TODO: set up numbers in stack
-
-    lea rsi, [numbers2]
-    mov rsi, [rsi]
-    call putint
-    jmp end
-
-    ; indices
-    ; rbx = 0 .. len(list)
-    ; r12 = 0 .. len(list)
-    mov rbx, 0
+    ; we use rbx and r12 for the outer and inner loop pointers, respectively
+    lea rbx, [numbers]
 loop1:
 
-    mov r12, 0
+    lea r12, [numbers]
 loop2:
-    ; TODO: check this pair of numbers 
+    ; TODO: check this pair of numbers
 
     ; here's where we do the work
     ; look up each number
-    lea r13, [numbers]
-    ;add r13, rbx
-    lea r14, [numbers]
-    ;add r14, r12
-    add r14, 1
-    
-    mov rsi, [r13]
+
+    mov rsi, [rbx]
     call putint
-    mov rsi, [r14]
+
+    mov rdi, newline
+    call _printf
+
+    mov rsi, [r12]
     call putint
-    
+
+    mov rdi, newline
+    call _printf
+
+    ; check if these two numbers sum to 2020
+    mov r15, 0
+    add r15, [rbx]
+    add r15, [r12]
+    ;mov rsi, r15
+    ;call putint
+    cmp r15, 2020
+    je end
+
     ; increment the inner counter (r12)
-    add r12, 1
+    add r12, 8
 
     ; check if the inner loop has completed
-    cmp r12, 1
+    mov r15, numbers
+    add r15, (6*8)
+    cmp r12, r15
     jne loop2
 
     ; increment the outer counter (rbx)
-    add rbx, 1
+    add rbx, 8
 
     ; check if the outer loop has completed
-    cmp rbx, 1
+    mov r15, numbers
+    add r15, (6*8)
+    cmp rbx, r15
     jne loop1
 
 end:
     ; assume that rbx and r12 point to the indices of the answer
-    ; TODO: multiple them together
-    ;       and print the result
+
+    ;mov rsi, [rbx]
+    ;call putint
+    ;mov rsi, [r12]
+    ;call putint
+
+    ; multiply them together
+    mov r13, [rbx]
+    imul r13, [r12]
+
+    mov rsi, r13
+    ;call putint
+
+    mov rax, r13
+
 
     ; now restore the stack pointer
     add rsp, 8
