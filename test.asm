@@ -20,105 +20,97 @@ section .data
 section .text
 
 _main:
-    push rbp                  ; push the base pointer onto the stack
-    mov rbp, rsp              ; move the stack pointer into the base pointer register
-    push rbx                  ; save registers that the callee may be relying on
+            push rbp                  ; push the base pointer onto the stack
+            mov rbp, rsp              ; move the stack pointer into the base pointer register
+            push rbx                  ; save registers that the callee may be relying on
 
-    sub rsp, 8                ; the stack pointer must be aligned on a 16 byte
-                              ; boundary when calling an external function.
-                              ; entering main pushed the return address onto
-                              ; the stack (8) we then pushed rbp and rbx (16)
-                              ; so the stack is at 24, which is not a 16 byte
-                              ; boundary we extend it by another 8 (32) to get
-                              ; a 16 byte boundary
+                                      ; the stack pointer must be aligned on a 16 byte boundary when
+                                      ; calling an external function.  entering main pushed the return
+                                      ; address onto the stack (8) we then pushed rbp and rbx (16) so the
+                                      ; stack is at 24, which is not a 16 byte boundary we extend it by
+                                      ; another 8 (32) to get a 16 byte boundary
+            sub rsp, 8
 
-                              ; we have two pointers into an array of numbers
-                              ; in the data segment called 'numbers'.  we have
-                              ; two loops, one for each pointer, from the start
-                              ; of the array to the end the numbers are 64 bit,
-                              ; so at the end of each loop we increment the
-                              ; pointer by 8 on each inner loop we check if the
-                              ; numbers sum to 2020 if they do, we multiply
-                              ; them together and jump
+                                      ; we have two pointers into an array of numbers in the data segment
+                                      ; called 'numbers'.  we have two loops, one for each pointer, from
+                                      ; the start of the array to the end the numbers are 64 bit, so at
+                                      ; the end of each loop we increment the pointer by 8 on each inner
+                                      ; loop we check if the numbers sum to 2020 if they do, we multiply
+                                      ; them together and jump
 
-                              ; we use rbx and r12 for the outer and inner loop
-                              ; pointers, respectively
-    lea rbx, [numbers]
+                                      ; we use rbx and r12 for the outer and inner loop
+                                      ; pointers, respectively
+            lea rbx, [numbers]
 main_loop1:
-    lea r12, [numbers]
+            lea r12, [numbers]
 main_loop2:
-    mov r15d, [rbx]           ; sum the two numbers together
-    add r15d, [r12]
+            mov r15d, [rbx]           ; sum the two numbers together
+            add r15d, [r12]
 
-    cmp r15d, 2020            ; if the sum is equal to 2020, jump to the end
-    je main_end
+            cmp r15d, 2020            ; if the sum is equal to 2020, jump to the end
+            je main_end
 
-                              ; increment the inner counter (r12)
-    add r12, 4
+                                      ; increment the inner counter (r12)
+            add r12, 4
 
-                              ; check if the inner loop has completed
-    lea r15, [numbers]
-    add r15, (200*4)
-    cmp r12, r15
-    jne main_loop2
+                                      ; check if the inner loop has completed
+            lea r15, [numbers]
+            add r15, (200*4)
+            cmp r12, r15
+            jne main_loop2
 
-                              ; increment the outer counter (rbx)
-    add rbx, 4
+                                      ; increment the outer counter (rbx)
+            add rbx, 4
 
-                              ; check if the outer loop has completed
-    mov r15, numbers
-    add r15, (200*4)
-    cmp rbx, r15
-    jne main_loop1
+                                      ; check if the outer loop has completed
+            mov r15, numbers
+            add r15, (200*4)
+            cmp rbx, r15
+            jne main_loop1
 main_end:
                               ; rbx and r12 will now be pointing to the two
                               ; numbers that sum to 2020
 
-    mov rsi, [rbx]            ; print the first number (rbx)
-    call putint
-    mov rdi, newline
-    call _printf
-    mov rsi, [r12]            ; print the second number (r12)
-    call putint
-    mov rdi, newline
-    call _printf
+            mov rsi, [rbx]            ; print the first number (rbx)
+            call putint
+            mov rdi, newline
+            call _printf
+            mov rsi, [r12]            ; print the second number (r12)
+            call putint
+            mov rdi, newline
+            call _printf
 
-    mov r13, [rbx]            ; multiply them together
-    imul r13, [r12]
+            mov r13, [rbx]            ; multiply them together
+            imul r13, [r12]
 
-    mov rsi, r13              ; print the product
-    call putint
+            mov rsi, r13              ; print the product
+            call putint
 
 
 
-    add rsp, 8                ; now restore the stack pointer
-    pop rbx                   ; restore rbx
-    pop rbp                   ; restore the base pointer
-    mov rax, 0                ; set exit code to 0
-    ret                       ; exit
+            add rsp, 8                ; now restore the stack pointer
+            pop rbx                   ; restore rbx
+            pop rbp                   ; restore the base pointer
+            mov rax, 0                ; set exit code to 0
+            ret                       ; exit
 
 ; this routine expects a 64 bit integer to be in rsi
 ; it will print it to stdout
 ; we assume the stack is 16-byte aligned
-
 putint:
-    push rbp                  ; push the base pointer onto the stack
-    mov rbp, rsp              ; move the stack pointer into the base pointer register
+            push rbp                  ; push the base pointer onto the stack
+            mov rbp, rsp              ; move the stack pointer into the base pointer register
 
-                              ; we need to tell printf to print an integer with the %d format string
-                              ; the amd64 calling convention is to pass the first six integer or pointer
-                              ; arguments in registers rdi, rsi, rdx, rcx, r8 and r9
+                                      ; the x86-64 calling convention is to pass the first six
+                                      ; arguments in the registers rdi, rsi, rdx, rcx, r8, r9.
 
-                              ; we just need to use rdi and rsi
-                              ; we want rdi="%u", rsi=<number>
-                              ; our number is already in rsi, so we just leave it there
+                                      ; the first arg to printf is the format string "%u", which
+                                      ; we've stored in the data section under the label uintformat.
+            lea rdi, [uintformat]
+                                      ; the second arg is the number to print, which is already in
+                                      ; rsi.
+            call _printf
 
-                              ; our format string is stored under the label uintformat so we put that
-                              ; address in rdi
-    lea rdi, [uintformat]
-
-    call _printf
-
-    pop rbp
-    ret
+            pop rbp
+            ret
 
