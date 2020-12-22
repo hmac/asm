@@ -1,5 +1,7 @@
-all: test.o
-	ld -arch x86_64 test.o -lSystem -o test
+all: test p13
 
-test.o: test.asm
-	nasm -f macho64 -g -F dwarf test.asm -w+all
+%.o: %.asm
+	nasm -f macho64 -g -F dwarf -w+all $*.asm 
+
+%: %.o
+	ld -arch x86_64 $@.o -lSystem -o $@
