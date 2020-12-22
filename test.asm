@@ -9,6 +9,7 @@ DEFAULT REL
 
 global _main
 extern _printf
+extern _getline
 
 section .data
   uintformat:
@@ -17,11 +18,18 @@ section .data
     db `\n`, 0
   space:
     db ' ', 0
-  numbers:
-    db dword %(1975, 1600, 113, 1773, 1782, 1680, 1386, 1682, 1991, 1640, 1760, 1236, 1159, 1259, 1279, 1739, 1826, 1888, 1072, 416, 1632, 1656, 1273, 1631, 1079, 1807, 1292, 1128, 1841, 1915, 1619, 1230, 1950, 1627, 1966, 774, 1425, 1983, 1616, 1633, 1559, 1925, 960, 1407, 1708, 1211, 1666, 1910, 1960, 1125, 1242, 1884, 1829, 1881, 1585, 1731, 1753, 1784, 1095, 1267, 1756, 1226, 1107, 1664, 1710, 2000, 1181, 1997, 1607, 1889, 1613, 1859, 1479, 1763, 1692, 1967, 522, 1719, 1816, 1714, 1331, 1976, 1160, 1899, 1906, 1783, 1061, 2006, 1993, 1717, 2009, 1563, 1733, 1866, 1651, 1437, 1517, 1113, 1743, 1240, 1629, 1868, 1912, 1296, 1873, 1673, 1996, 1814, 1215, 1927, 1956, 1970, 1887, 1702, 1495, 1754, 1621, 1055, 1538, 1693, 1840, 1685, 1752, 1933, 1727, 1648, 1792, 1734, 1305, 1446, 1764, 1890, 1904, 1560, 1698, 1645, 1214, 1516, 1064, 1729, 1835, 1642, 1932, 1683, 962, 1081, 1943, 1502, 1622, 196, 1972, 1916, 1850, 1205, 1971, 1937, 1575, 1401, 1351, 2005, 1917, 1670, 1388, 1051, 1941, 1751, 1169, 510, 217, 1948, 1120, 1635, 1636, 1511, 1691, 1589, 1410, 1902, 1572, 1871, 1423, 1114, 1806, 1282, 1193, 1974, 388, 1398, 1992, 1263, 1786, 1723, 1206, 1363, 1177, 1646, 1231, 1140, 1088, 1322)
-
 
 section .text
+
+; system call cheatsheet
+; - system call number + 0x2000000 is passed in rax
+; - args in rdi, rsi, rdx
+; - use syscall instruction to trigger a syscall
+; 
+; name | number | signature
+; -------------------------
+; read | 3      | read(int fd, user_addr_t cbuf, user_size_t nbyte)
+; write| 4      | write(int fd, user_addr_t cbuf, user_size_t nbyte)
 
 _main:
             push rbp                  ; push the base pointer onto the stack
@@ -41,6 +49,59 @@ _main:
                                       ; We extend it by another 8 (64) to get a 16 byte boundary
             sub rsp, 8
 
+
+                                      ; We're going to read up to 1008 bytes of STDIN to a buffer on
+                                      ; the stack, then parse each line of it as a 32 bit decimal
+                                      ; integer, overwriting it as we go. We'll then use this array
+                                      ; of integers as input to the two calculation functions.
+
+                                      ; Allocate 1024 bytes on the stack
+            sub rsp, 1024
+
+                                      ; Read 1008 bytes from STDIN
+            mov rax, 0x2000003
+            mov rdi, 0
+            mov rsi, rsp
+            mov rdx, 1008
+            syscall
+
+                                      ; TODO: rax contains the number of bytes read. We should use
+                                      ; that to make sure we only parse what we've read.
+
+                                      ; Now we parse each line of the input as an integer, writing
+                                      ; the result into the same array. Our input consists of 3 or 4
+                                      ; digit numbers so the string representation will never be
+                                      ; larger than the 32 bit representation. So we can safely do
+                                      ; this without tripping over ourselves.
+
+                                      ;                rsp
+                                      ;                 |
+                                      ; before parsing: 1 2 3 4 , 1 2 3 , 5 6 7 8 , 4 5 6 ,
+                                      ; after parsing:  000004d20000007b0000162e000001c8
+                                      ;                 |                               | |
+                                      ;                rsp                            rbx  rdi
+
+            mov rdi, rsp              ; rdi will point to the next place we parse an integer
+            mov rbx, rsp              ; rbx will point to the next place we write an integer
+main_parse:
+            call read_uint
+            cmp rax, 0                ; break if rax is 0 (indicating parsing failed)
+            je main_calc
+
+            mov [rbx], eax            ; write rax back to the array
+
+           inc rdi                    ; bump rdi to get past the newline it has stopped on
+           add rbx, 4                 ; bump rbx by 4 bytes to get past the integer we wrote
+           jmp main_parse             ; repeat
+
+main_calc:
+                                      ; now our parsed numbers live in a contiguous chunk of memory
+                                      ; starting at rsp ending at the byte before rbx.
+                                      ; We pass *start, *end to each calculation function.
+
+            mov rdi, rsp              ; start address of number array
+            mov rsi, rbx              ; 'end' address (i.e. address of byte just after last byte)
+
             call part1                ; calculate the answer to the first part
             mov rsi, rax              ; print it
             call putint
@@ -48,12 +109,16 @@ _main:
             mov rdi, newline
             call _printf
 
+            mov rdi, rsp
+            mov rsi, rbx
             call part2                ; calculate the answer to the second part
             mov rsi, rax              ; print it
             call putint
 
-            add rsp, 8                ; now restore the stack pointer
+            add rsp, 1024             ; now restore the stack pointer
+            add rsp, 8
 
+main_exit:
                                       ; restore the registers we saved at the start
             pop r15
             pop r14
@@ -85,7 +150,7 @@ putint:
             pop rbp
             ret
 
-; part1(): returns the product of the two numbers which sum to 2020
+; part1(int *start, int *end): returns the product of the two numbers which sum to 2020
 ; this function doesn't use the stack or any preserved registers so we don't need
 ; to do the usual saving of registers
 part1:
@@ -93,9 +158,11 @@ part1:
                                       ; rax and rcx point to numbers in the array
                                       ; rdx will be used as a general scratch register
                                       ; (when we need only half of rdx we refer to it as edx)
-            mov rax, numbers
+                                      ; rdi holds the start of the array
+                                      ; rsi holds the end of the array
+            mov rax, rdi
 part1_1:
-            mov rcx, numbers
+            mov rcx, rdi
 part1_2:
             mov edx, [rax]
             add edx, [rcx]           ; sum the two numbers together
@@ -107,19 +174,15 @@ part1_2:
             add rcx, 4
 
                                       ; check if the inner loop has completed
-            lea rdx, [numbers]
-            add rdx, (200*4)
-            cmp rcx, rdx
-            jne part1_2
+            cmp rcx, rsi
+            jl part1_2
 
                                       ; increment the outer counter (rax)
             add rax, 4
 
                                       ; check if the outer loop has completed
-            mov rdx, numbers
-            add rdx, (200*4)
-            cmp rax, rdx
-            jne part1_1
+            cmp rax, rsi
+            jl part1_1
 part1_end:
                                       ; rax and rcx will now be pointing to the two
                                       ; numbers that sum to 2020
@@ -129,36 +192,62 @@ part1_end:
 
             ret                       ; exit
 
-; part2(): returns the product of the three numbers which sum to 2020
+; part2(int *start, int *end): returns the product of the three numbers which sum to 2020
 part2:
                                       ; We'll use rax, rcx and rdx for pointers into the numbers
-                                      ; array. rsi will be our scratch register.
-                                      ; r8 will hold a pointer to the end of the array
-            mov r8, numbers + (200*4)
-            mov rax, numbers
+                                      ; array. r8 will be our scratch register.
+                                      ; rdi holds the start of the array
+                                      ; rsi holds the end of the array
+            mov rax, rdi
 part2_1:
-            mov rcx, numbers
+            mov rcx, rdi
 part2_2:
-            mov rdx, numbers
+            mov rdx, rdi
 part2_3:
-            mov esi, [rax]
-            add esi, [rcx]
-            add esi, [rdx]
-            cmp esi, 2020
+            mov r8d, [rax]
+            add r8d, [rcx]
+            add r8d, [rdx]
+            cmp r8d, 2020
             je part2_end
 
             add rdx, 4
-            cmp rdx, r8
-            jne part2_3
+            cmp rdx, rsi
+            jl part2_3
             add rcx, 4
-            cmp rcx, r8
-            jne part2_2
+            cmp rcx, rsi
+            jl part2_2
             add rax, 4
-            cmp rax, r8
-            jne part2_1
+            cmp rax, rsi
+            jl part2_1
 
 part2_end:
             mov rax, [rax]
             imul rax, [rcx]
             imul rax, [rdx]
             ret
+
+; a simplified atoi
+; read_uint(char *s) -> uint64
+read_uint:
+                                      ; things we don't handle: spaces, negative numbers
+            mov rax, 0
+read_uint_1:
+                                      ; rdi is a pointer to the first character
+            mov rcx, 0
+            mov cl, [rdi]             ; copy the char to cl (last byte of rcx)
+            cmp cl, 0                 ; if the char is a null byte, exit
+            je read_unit_exit
+            sub cl, 0x30              ; determine if the char is a digit: it should be between 0x30 and 0x39
+            cmp cl, 0
+            jl read_unit_exit         ; < 0: exit
+            cmp cl, 9
+            jg read_unit_exit         ; > 9: exit
+
+            imul rax, 10              ; multiply the current number by 10
+            add rax, rcx              ; add the parsed digit into the units column
+            add rdi, 1                ; step to the next character in the string
+            jmp read_uint_1           ; repeat
+
+read_unit_exit:
+            ret
+
