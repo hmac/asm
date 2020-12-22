@@ -2,6 +2,7 @@
 
 ; useful references:
 ; https://www.cs.uaf.edu/2017/fall/cs301/reference/x86_64.html
+; https://www.cs.virginia.edu/~evans/cs216/guides/x86.html
 
 ; macOS expects position-independent code
 ; see https://www.nasm.us/doc/nasmdoc7.html#section-7.2
