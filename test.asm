@@ -134,20 +134,13 @@ main_exit:
 ; it will print it to stdout
 ; we assume the stack is 16-byte aligned
 putint:
-            push rbp                  ; push the base pointer onto the stack
-            mov rbp, rsp              ; move the stack pointer into the base pointer register
+            sub rsp, 8                ; re-align the stack, since entering this function will have
+                                      ; bumped it by 8 bytes
 
-                                      ; the x86-64 calling convention is to pass the first six
-                                      ; arguments in the registers rdi, rsi, rdx, rcx, r8, r9.
+            mov rdi, uintformat       ; set the format to %u
+            call _printf              ; we expect the integer to be in rdi already
 
-                                      ; the first arg to printf is the format string "%u", which
-                                      ; we've stored in the data section under the label uintformat.
-            lea rdi, [uintformat]
-                                      ; the second arg is the number to print, which is already in
-                                      ; rsi.
-            call _printf
-
-            pop rbp
+            add rsp, 8                ; put the stack back
             ret
 
 ; part1(int *start, int *end): returns the product of the two numbers which sum to 2020
