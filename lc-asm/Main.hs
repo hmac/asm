@@ -10,18 +10,67 @@ import Data.Functor (($>))
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Void (Void)
+
+-- | CLI
+import System.Environment (getArgs)
+import System.Exit (ExitCode (..), exitWith)
+
+-- | Parsing and printing
 import Text.Megaparsec hiding (State)
 import Text.Megaparsec.Char
+import Text.Pretty.Simple (pPrint)
+
+-- | Web server
+import qualified Network.Wai as Wai
+import qualified Network.Wai.Handler.Warp as Warp
+import Network.HTTP.Types.Status (status400, status200)
+import Data.ByteString.Lazy.Char8 (unpack, pack)
 
 main :: IO ()
 main = do
+  args <- getArgs
+  case args of
+    [] -> asm
+    ["parse"] -> parseInput >>= pPrint
+    ["asm"] -> asm
+    ["lift"] -> lambdaLift >>= pPrint
+    ["super"] -> super >>= pPrint
+    ["web", port] -> do
+      putStrLn $ "Launching HTTP server on port " <> port
+      launchWebServer port
+    a -> error $ "Bad argument: " <> show a
+
+launchWebServer :: String -> IO ()
+launchWebServer portStr = Warp.run (read portStr) app
+  where
+    app req respond = do
+      body <- unpack <$> Wai.strictRequestBody req
+      respond $ case parse (parseExp <* eof) "<request>" body of
+         Left err -> do let errStr = pack $ errorBundlePretty err
+                        Wai.responseLBS status400 mempty errStr
+         Right expr -> do let lifted = lift expr
+                              scs = Map.map supercombinate lifted
+                              asm = printProgram scs
+                          Wai.responseLBS status200 mempty (pack asm)
+
+
+parseInput = do
   input <- getContents
   case parse (parseExp <* eof) "<stdin>" input of
-    Left err -> putStrLn (errorBundlePretty err)
-    Right expr ->
-      let defs = lift expr
-          scs = Map.map supercombinate defs
-       in putStrLn $ printProgram scs
+    Left err -> putStrLn (errorBundlePretty err) >> exitWith (ExitFailure 1)
+    Right expr -> pure expr
+
+lambdaLift = do
+  expr <- parseInput
+  pure (lift expr)
+
+super = do
+  defs <- lambdaLift
+  pure $ Map.map supercombinate defs
+
+asm = do
+  scs <- super
+  putStrLn $ printProgram scs
 
 -- Idea:
 -- Convert lambda calculus with just integers into assembly
@@ -41,7 +90,7 @@ data Prim = Add | Sub | Mul
   deriving (Eq, Show)
 
 -- The Int is a counter for naming new definitions
-type Env = (Int, Map Int Exp)
+type Env = (Int, Map String Exp)
 
 -- Simple algorithm:
 -- 1. If there are no lambda abstractions, finish
@@ -50,7 +99,7 @@ type Env = (Int, Map Int Exp)
 -- 4. Name it and put it in the environment
 -- 5. Replace the occurrence of the lambda by the name applied ot the free variables
 
-lift :: Exp -> Map Int Exp
+lift :: Exp -> Map String Exp
 lift = snd . lift' (0, mempty)
   where
     lift' :: Env -> Exp -> Env
@@ -61,11 +110,11 @@ lift = snd . lift' (0, mempty)
             -- abstract each as a parameter
             sc = foldr Lam lam vars
             -- insert the resulting supercombinator into the environment
-            scs' = Map.insert i sc scs
+            scs' = Map.insert ("_" <> show i) sc scs
             lam' = foldr (flip App . Var) (Global i) vars
          in -- replace the lambda with a variable applied to the free vars and repeat
             lift' (i + 1, scs') (hole lam')
-      Nothing -> (i, Map.insert (negate 1) expr scs)
+      Nothing -> (i, Map.insert "main" expr scs)
 
 test :: Bool
 test =
@@ -80,9 +129,9 @@ test =
         supercombinate
         (lift e)
         == Map.fromList
-          [ (-1, ([], SApp (SGlobal 1) [SInt 4])),
-            (0, (["x", "y"], SPrim Add (SVar "x") (SVar "y"))),
-            (1, (["x"], SApp (SGlobal 0) [SVar "x", SVar "x"]))
+          [ ("main", ([], SApp (SGlobal 1) [SInt 4])),
+            ("0", (["x", "y"], SPrim Add (SVar "x") (SVar "y"))),
+            ("1", (["x"], SApp (SGlobal 0) [SVar "x", SVar "x"]))
           ]
 
 -- Find the first lambda which has no lambdas in its body
@@ -148,7 +197,7 @@ printAsm = \case
   Mov o1 o2 -> "mov " <> printOp o1 <> ", " <> printOp o2
   IAdd o1 o2 -> "add " <> printOp o1 <> ", " <> printOp o2
   ISub o1 o2 -> "sub " <> printOp o1 <> ", " <> printOp o2
-  IMul o1 o2 -> "mul " <> printOp o1 <> ", " <> printOp o2
+  IMul o1 o2 -> "imul " <> printOp o1 <> ", " <> printOp o2
   Call o -> "call " <> printOp o
   Ret -> "ret"
 
@@ -171,8 +220,18 @@ printOp = \case
 compile :: SC -> Reg [Asm]
 compile (variables, e) = do
   -- Allocate registers for each argument to the function
-  vs <- mapM (\v -> (v,) <$> mkReg) variables
-  go vs e
+  let vs = zip variables [1 ..]
+  -- Get the current register counter
+  rc <- get
+  -- The register count should be the max of the current rc and the highest register used for
+  -- holding the function arguments.
+  let rc' = (max rc (length vs))
+  put rc'
+  -- Compile the body of the supercombinator
+  result <- go vs e
+  -- Restore the register counter, so other functions can use the scratch registers we have used
+  put rc'
+  pure result
   where
     go :: [(String, Int)] -> SExp -> Reg [Asm]
     go vars = \case
@@ -226,7 +285,8 @@ compile (variables, e) = do
         let restore = map (\(i, j) -> Mov (R i) (R j)) newRegs
         -- Then put the result of the call (r0) into ri
         let finally = [Mov (R i) (R 0)]
-        pure $ concat [save, is, restore, finally]
+        rest <- mkCall vars args
+        pure $ concat [save, is, restore, finally, rest]
     lookupVar :: String -> [(String, Int)] -> Int
     lookupVar x vars = case lookup x vars of
       Just j -> j
@@ -245,13 +305,10 @@ mkReg = do
 runReg :: Reg a -> a
 runReg = flip evalState 1
 
-printProgram :: Map Int SC -> String
+printProgram :: Map String SC -> String
 printProgram m =
-  case Map.lookup (-1) m of
-    Just main ->
-      let m' = Map.delete (-1) m
-          mainStr = unlines $ "main:" : map (("  " <>) . printAsm) (runReg (compile main))
-       in mainStr <> Map.foldMapWithKey (\l e -> unlines $ ("_" <> show l <> ":") : map (("  " <>) . printAsm) (runReg (compile e))) m'
+  let defs = runReg $ mapM (\(l, f) -> (l,) <$> compile f) $ Map.toList m
+   in foldMap (\(l, e) -> unlines $ (l <> ":") : map (("  " <>) . printAsm) e) defs
 
 -- Parsing
 
