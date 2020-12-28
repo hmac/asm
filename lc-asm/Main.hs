@@ -49,17 +49,19 @@ import           Compile                        ( compileSC
 main :: IO ()
 main = do
   args <- getArgs
-  let multi     = parseInput <&> multiLambda
-      lift_     = multi <&> lift
-      eta'd     = lift_ <&> Map.map eta
-      necessary = eta'd <&> removeRedundant
-      asm       = necessary <&> printProgram
+  let multi        = parseInput <&> multiLambda
+      lift_        = multi <&> lift
+      eta'd        = lift_ <&> Map.map eta
+      necessary    = eta'd <&> removeRedundant
+      asm          = necessary <&> Map.map compileSC
+      optimisedAsm = asm <&> Map.map removeRedundantInstructions
   case args of
-    ["parse"]     -> parseInput >>= pPrint
-    ["multi"]     -> multi >>= pPrint
-    ["lift" ]     -> lift_ >>= pPrint
-    ["asm"  ]     -> asm >>= putStrLn
-    []            -> asm >>= putStrLn
+    ["parse"    ] -> parseInput >>= pPrint
+    ["multi"    ] -> multi >>= pPrint
+    ["lift"     ] -> lift_ >>= pPrint
+    ["asm"      ] -> asm <&> printProgram >>= putStrLn
+    ["optimised"] -> optimisedAsm <&> printProgram >>= putStrLn
+    []            -> optimisedAsm <&> printProgram >>= putStrLn
     ["web", port] -> do
       putStrLn $ "Launching HTTP server on port " <> port
       launchWebServer port
@@ -76,7 +78,7 @@ launchWebServer portStr = Warp.run (read portStr) app
         Wai.responseLBS status400 mempty errStr
       Right expr -> do
         let supers = removeRedundant $ Map.map eta $ lift $ multiLambda expr
-            asm    = printProgram supers
+            asm    = printProgram $ Map.map compileSC supers
         Wai.responseLBS status200 mempty (pack asm)
 
 parseInput = do
@@ -95,6 +97,7 @@ parseInput = do
 -- 5. Eta: eta-reduce supercombinators
 -- 6. RemoveRedundant: Remove supercombinators which are aliases for other supercombinators
 -- 7. Compile: Convert each supercombinator to a sequence of assembly instructions
+-- 8. Simplify: Remove redundant instructions, like mov r0, r0
 
 -- Multi-lambda pass: convert \w x. \y z. into \w x y z.
 multiLambda :: Exp -> Exp
@@ -127,7 +130,7 @@ lift = snd . lift' (0, mempty)
           -- insert the resulting supercombinator into the environment
           scs' = Map.insert ("_" <> show i) sc scs
           lam' = foldr (flip App . Var) (Global i) fvs
-      in            -- replace the lambda with a variable applied to the free vars and repeat
+      in                           -- replace the lambda with a variable applied to the free vars and repeat
           lift' (i + 1, scs') (hole lam')
     Nothing -> (i, Map.insert "_main" (mkSC [] expr) scs)
 
@@ -173,6 +176,13 @@ isRedundant ([], e) = case e of
   SApp (SGlobal i) [] -> True
   _                   -> False
 isRedundant _ = False
+
+removeRedundantInstructions :: [Asm] -> [Asm]
+removeRedundantInstructions = filter (not . redundant)
+ where
+  redundant = \case
+    Mov r1 r2 | r1 == r2 -> True
+    _                    -> False
 
 test :: IO ()
 test =
@@ -258,11 +268,10 @@ printPseudoReg :: PseudoReg -> String
 printPseudoReg (Reg   r) = printReg r
 printPseudoReg (Stack i) = "[rsp+" <> show i <> "]"
 
-printProgram :: Map String SC -> String
-printProgram m =
-  let defs = map (\(l, f) -> (l, compileSC f)) $ Map.toList m
-  in  foldMap (\(l, e) -> unlines $ (l <> ":") : map (("  " <>) . printAsm) e)
-              defs
+printProgram :: Map String [Asm] -> String
+printProgram defs =
+  foldMap (\(l, e) -> unlines $ (l <> ":") : map (("  " <>) . printAsm) e)
+    $ Map.toList defs
 
 -- Parsing
 
