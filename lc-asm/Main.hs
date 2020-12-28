@@ -36,7 +36,9 @@ main = do
   let multi = parseInput <&> multiLambda
       lift_ = multi <&> lift
       super = lift_ <&> Map.map supercombinate
-      asm = super <&> printProgram
+      eta'd = super <&> Map.map eta
+      necessary = eta'd <&> removeRedundant
+      asm = necessary <&> printProgram
   case args of
     ["parse"] -> parseInput >>= pPrint
     ["multi"] -> multi >>= pPrint
@@ -62,7 +64,6 @@ launchWebServer portStr = Warp.run (read portStr) app
                               asm = printProgram scs
                           Wai.responseLBS status200 mempty (pack asm)
 
-
 parseInput = do
   input <- getContents
   case parse (parseExp <* eof) "<stdin>" input of
@@ -76,7 +77,9 @@ parseInput = do
 -- 1. MultiLambda: Merge nested lambdas
 -- 2. Lift: Lift lambdas to top-level supercombinators
 -- 3. Supercombinate: Change type from Exp to SExp (TODO: merge with above)
--- 4. Compile: Convert each supercombinator to a sequence of assembly instructions
+-- 4. Eta: eta-reduce supercombinators
+-- 5. RemoveRedundant: Remove supercombinators which are aliases for other supercombinators
+-- 6. Compile: Convert each supercombinator to a sequence of assembly instructions
 
 -- Multi-lambda pass: convert \w x. \y z. into \w x y z.
 multiLambda :: Exp -> Exp
@@ -95,8 +98,6 @@ multiLambda = \case
 -- 4. Name it and put it in the environment
 -- 5. Replace the occurrence of the lambda by the name applied to the free variables
 
--- TODO: lift multi-lambdas into multi-supercombinators
-
 lift :: Exp -> Map String Exp
 lift = snd . lift' (0, mempty)
   where
@@ -114,6 +115,33 @@ lift = snd . lift' (0, mempty)
          in -- replace the lambda with a variable applied to the free vars and repeat
             lift' (i + 1, scs') (hole lam')
       Nothing -> (i, Map.insert "_main" expr scs)
+
+-- Convert
+--   $1 ... y = $2 ... y
+-- into
+--   $1 ... = $2 ...
+eta :: SC -> SC
+eta ([], e) = ([], e)
+eta (vars, e) = case e of
+                  SApp f args -> let v = last vars
+                                 in if last args == SVar v
+                                       then eta (init vars, SApp f (init args))
+                                       else (vars, e)
+                  _ -> (vars, e)
+
+removeRedundant :: Map String SC -> Map String SC
+removeRedundant scs = let scs' = Map.filter (not . isRedundant) scs
+                       in if Map.size scs' /= Map.size scs
+                             then removeRedundant scs'
+                             else scs
+
+-- True if the supercombinator is just an alias for another supercombinator, e.g.
+--   $1 = $2
+isRedundant :: SC -> Bool
+isRedundant ([], e) = case e of
+                        SApp (SGlobal i) [] -> True
+                        _ -> False
+isRedundant _ = False
 
 test :: IO ()
 test =
