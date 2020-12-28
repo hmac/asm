@@ -26,6 +26,9 @@ import qualified Network.Wai.Handler.Warp as Warp
 import Network.HTTP.Types.Status (status400, status200)
 import Data.ByteString.Lazy.Char8 (unpack, pack)
 
+import Types
+import Compile (compileSC, r0, argReg)
+
 main :: IO ()
 main = do
   args <- getArgs
@@ -77,18 +80,6 @@ asm = do
 -- 1. Fully lambda lift
 -- 2. Convert each (now top-level) function to an assembly function
 
-data Exp
-  = Lam String Exp
-  | App Exp Exp
-  | Var String
-  | Global Int
-  | Int Int
-  | Prim Prim Exp Exp
-  deriving (Eq, Show)
-
-data Prim = Add | Sub | Mul
-  deriving (Eq, Show)
-
 -- The Int is a counter for naming new definitions
 type Env = (Int, Map String Exp)
 
@@ -98,6 +89,8 @@ type Env = (Int, Map String Exp)
 -- 3. Abstract its free variables as extra parameters
 -- 4. Name it and put it in the environment
 -- 5. Replace the occurrence of the lambda by the name applied ot the free variables
+
+-- TODO: lift multi-lambdas into multi-supercombinators
 
 lift :: Exp -> Map String Exp
 lift = snd . lift' (0, mempty)
@@ -114,7 +107,7 @@ lift = snd . lift' (0, mempty)
             lam' = foldr (flip App . Var) (Global i) vars
          in -- replace the lambda with a variable applied to the free vars and repeat
             lift' (i + 1, scs') (hole lam')
-      Nothing -> (i, Map.insert "main" expr scs)
+      Nothing -> (i, Map.insert "_main" expr scs)
 
 test :: Bool
 test =
@@ -161,19 +154,6 @@ fv = go []
       App e1 e2 -> go bound e1 <> go bound e2
       Prim _ e1 e2 -> go bound e1 <> go bound e2
 
--- Supercombinator body
--- Like Exp but with no lambda
--- and applications are saturated
-data SExp
-  = SApp SExp [SExp]
-  | SVar String
-  | SGlobal Int
-  | SInt Int
-  | SPrim Prim SExp SExp
-  deriving (Eq, Show)
-
-type SC = ([String], SExp)
-
 supercombinate :: Exp -> SC
 supercombinate = go []
   where
@@ -189,125 +169,33 @@ supercombinate = go []
       Int i -> SInt i
       Prim p e1 e2 -> SPrim p (convert e1) (convert e2)
 
-data Asm = Mov Op Op | IAdd Op Op | ISub Op Op | IMul Op Op | Call Op | Ret
-  deriving (Eq, Show)
-
 printAsm :: Asm -> String
 printAsm = \case
   Mov o1 o2 -> "mov " <> printOp o1 <> ", " <> printOp o2
   IAdd o1 o2 -> "add " <> printOp o1 <> ", " <> printOp o2
   ISub o1 o2 -> "sub " <> printOp o1 <> ", " <> printOp o2
   IMul o1 o2 -> "imul " <> printOp o1 <> ", " <> printOp o2
+  Push r -> "push " <> printReg r
+  Pop r -> "pop " <> printReg r
   Call o -> "call " <> printOp o
   Ret -> "ret"
 
--- Operands are registers, labels or literal integers
-data Op = R Int | L Int | I Int
-  deriving (Eq, Show)
-
 printOp :: Op -> String
 printOp = \case
-  R i -> "r" <> show i
+  R r -> printPseudoReg r
   L i -> "_" <> show i
   I i -> show i
 
--- Compile a supercombinator to assembly instructions
--- Firstly, the register r0..rN will contain vars
--- we need to save these if they're needed
--- For each arg at index i:
--- - if it's a variable in vars, we just move it to ri
--- - if it's a global, we just move it to ri
-compile :: SC -> Reg [Asm]
-compile (variables, e) = do
-  -- Allocate registers for each argument to the function
-  let vs = zip variables [1 ..]
-  -- Get the current register counter
-  rc <- get
-  -- The register count should be the max of the current rc and the highest register used for
-  -- holding the function arguments.
-  let rc' = (max rc (length vs))
-  put rc'
-  -- Compile the body of the supercombinator
-  result <- go vs e
-  -- Restore the register counter, so other functions can use the scratch registers we have used
-  put rc'
-  pure result
-  where
-    go :: [(String, Int)] -> SExp -> Reg [Asm]
-    go vars = \case
-      SVar x -> pure [Mov (R 0) (R (lookupVar x vars)), Ret]
-      SGlobal i -> pure [Call (L i)]
-      SApp f args -> case f of
-        SGlobal i -> do
-          is <- mkCall vars (zip args [1 ..])
-          pure $ is <> [Call (L i)]
-        SVar x -> do
-          is <- mkCall vars (zip args [1 ..])
-          pure $ is <> [Call (R (lookupVar x vars))]
-      SPrim p a1 a2 -> do
-        r1 <- mkReg
-        r2 <- mkReg
-        is <- mkCall vars [(a1, r1), (a2, r2)]
-        let rest = case p of
-              Add -> [Mov (R 0) (R r1), IAdd (R 0) (R r2), Ret]
-              Sub -> [Mov (R 0) (R r1), ISub (R 0) (R r2), Ret]
-              Mul -> [Mov (R 0) (R r1), IMul (R 0) (R r2), Ret]
-        pure $ is <> rest
-    -- Convert an application to a call instruction
-    -- Before we can do this we need to ensure all arguments are evaluated
-    -- Because applications are in spine form, any well-typed program will have a variable as the
-    -- application head, so we don't need to evaluate f.
-    mkCall :: [(String, Int)] -> [(SExp, Int)] -> Reg [Asm]
-    mkCall _ [] = pure []
-    mkCall vars ((a, i) : args) = case a of
-      SGlobal j -> do
-        is <- mkCall vars args
-        pure $ [Mov (R i) (L j)] <> is
-      SVar x ->
-        let j = lookupVar x vars
-         in if i == j
-              then mkCall vars args
-              else do
-                is <- mkCall vars args
-                pure $ [Mov (R i) (R (lookupVar x vars))] <> is
-      SInt n -> do
-        is <- mkCall vars args
-        pure $ [Mov (R i) (I n)] <> is
-      -- We need to compile g_args, call g, then put the result in ri
-      -- But at the same time we need to preserve any rN for 0 < N < i
-      SApp g g_args -> do
-        -- First, copy r1..r(i-1) to new registers
-        newRegs <- zip [1 ..] <$> replicateM (i -1) mkReg
-        let save = map (\(i, j) -> Mov (R j) (R i)) newRegs
-        -- Then compile (g g_args)
-        is <- go vars (SApp g g_args)
-        -- Then put the registers back
-        let restore = map (\(i, j) -> Mov (R i) (R j)) newRegs
-        -- Then put the result of the call (r0) into ri
-        let finally = [Mov (R i) (R 0)]
-        rest <- mkCall vars args
-        pure $ concat [save, is, restore, finally, rest]
-    lookupVar :: String -> [(String, Int)] -> Int
-    lookupVar x vars = case lookup x vars of
-      Just j -> j
-      Nothing -> error $ "undefined variable: " <> x
+printReg :: Register -> String
+printReg (Register r) = r
 
--- A monad for generating unique registers
-type Reg a = State Int a
-
--- Generate a unique register
-mkReg :: Reg Int
-mkReg = do
-  i <- get
-  put (i + 1)
-  pure i
-
-runReg :: Reg a -> a
-runReg = flip evalState 1
+printPseudoReg :: PseudoReg -> String
+printPseudoReg (Reg r) = printReg r
+printPseudoReg (Stack i) = "[rsp+" <> show i <> "]"
 
 printProgram :: Map String SC -> String
 printProgram m =
-  let defs = runReg $ mapM (\(l, f) -> (l,) <$> compile f) $ Map.toList m
+  let defs = map (\(l, f) -> (l, compileSC f)) $ Map.toList m
    in foldMap (\(l, e) -> unlines $ (l <> ":") : map (("  " <>) . printAsm) e) defs
 
 -- Parsing
