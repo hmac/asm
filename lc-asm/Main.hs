@@ -80,28 +80,30 @@ asm = do
 -- 1. Fully lambda lift
 -- 2. Convert each (now top-level) function to an assembly function
 
--- The Int is a counter for naming new definitions
-type Env = (Int, Map String Exp)
+-- Multi-lambda pass: convert \w x. \y z. into \w x y z.
+multiLambda :: Exp -> Exp
+multiLambda = undefined
 
 -- Simple algorithm:
 -- 1. If there are no lambda abstractions, finish
 -- 2. Choose any lambda which has no inner lambdas in its body
 -- 3. Abstract its free variables as extra parameters
 -- 4. Name it and put it in the environment
--- 5. Replace the occurrence of the lambda by the name applied ot the free variables
+-- 5. Replace the occurrence of the lambda by the name applied to the free variables
 
 -- TODO: lift multi-lambdas into multi-supercombinators
 
 lift :: Exp -> Map String Exp
 lift = snd . lift' (0, mempty)
   where
-    lift' :: Env -> Exp -> Env
+    -- The Int is a counter for naming new definitions
+    lift' :: (Int, Map String Exp) -> Exp -> (Int, Map String Exp)
     lift' (i, scs) expr = case findLambda expr of
       Just (lam, hole) ->
         -- get the free variables of the lambda body
         let vars = fv lam
             -- abstract each as a parameter
-            sc = foldr Lam lam vars
+            sc = Lam vars lam
             -- insert the resulting supercombinator into the environment
             scs' = Map.insert ("_" <> show i) sc scs
             lam' = foldr (flip App . Var) (Global i) vars
@@ -109,23 +111,30 @@ lift = snd . lift' (0, mempty)
             lift' (i + 1, scs') (hole lam')
       Nothing -> (i, Map.insert "_main" expr scs)
 
-test :: Bool
+test :: IO ()
 test =
   let e =
         App
           ( Lam
-              "x"
-              (App (Lam "y" (Prim Add (Var "x") (Var "y"))) (Var "x"))
+              ["x"]
+              (App (Lam ["y"] (Prim Add (Var "x") (Var "y"))) (Var "x"))
           )
           (Int 4)
-   in Map.map
+      expected =
+         Map.fromList
+          [ ("_main", ([], SApp (SGlobal 1) [SInt 4])),
+            ("_0", (["x", "y"], SPrim Add (SVar "x") (SVar "y"))),
+            ("_1", (["x"], SApp (SGlobal 0) [SVar "x", SVar "x"]))
+          ]
+      actual =  Map.map
         supercombinate
         (lift e)
-        == Map.fromList
-          [ ("main", ([], SApp (SGlobal 1) [SInt 4])),
-            ("0", (["x", "y"], SPrim Add (SVar "x") (SVar "y"))),
-            ("1", (["x"], SApp (SGlobal 0) [SVar "x", SVar "x"]))
-          ]
+   in if expected == actual then putStrLn "Pass."
+                            else do putStrLn "Fail."
+                                    putStrLn "Expected:"
+                                    pPrint expected
+                                    putStrLn "Actual:"
+                                    pPrint actual
 
 -- Find the first lambda which has no lambdas in its body
 findLambda :: Exp -> Maybe (Exp, Exp -> Exp)
@@ -148,7 +157,7 @@ fv = go []
       Var v
         | v `elem` bound -> []
         | otherwise -> [v]
-      Lam x e -> go (x : bound) e
+      Lam xs e -> go (xs <> bound) e
       Int _ -> []
       Global _ -> []
       App e1 e2 -> go bound e1 <> go bound e2
@@ -158,7 +167,7 @@ supercombinate :: Exp -> SC
 supercombinate = go []
   where
     go vars = \case
-      Lam x e -> go (vars <> [x]) e
+      Lam xs e -> go (vars <> xs) e
       e -> (vars, convert e)
     convert = \case
       App e1 e2 -> case convert e1 of
@@ -219,17 +228,19 @@ parseApp = do
 parseLam = do
   _ <- string "\\"
   void space
-  x <- many alphaNumChar
+  xs <- some parseVarString
   void space
   _ <- string "."
   void space
-  Lam x <$> parseExp
+  Lam xs <$> parseExp
 
-parseVar = do
+parseVar = Var <$> parseVarString
+
+parseVarString = do
   a <- letterChar
   as <- many alphaNumChar
   void space
-  pure $ Var (a : as)
+  pure (a:as)
 
 parsePrim :: Parser Prim
 parsePrim =

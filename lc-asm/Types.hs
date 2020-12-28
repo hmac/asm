@@ -1,7 +1,7 @@
 module Types where
 
 data Exp
-  = Lam String Exp
+  = Lam [String] Exp
   | App Exp Exp
   | Var String
   | Global Int
