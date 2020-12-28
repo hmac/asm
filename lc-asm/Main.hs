@@ -90,7 +90,7 @@ parseInput = do
 -- Pipeline
 -- --------
 -- 1. MultiLambda: Merge nested lambdas
--- 2. DeBruijn: Replace variables with de Bruijn indices (TODO)
+-- 2. DeBruijn: Replace variables with de Bruijn indices (TODO - this allows better parameter ordering during lambda-lifting)
 -- 3. Lift: Lift lambdas to top-level supercombinators
 -- 5. Eta: eta-reduce supercombinators
 -- 6. RemoveRedundant: Remove supercombinators which are aliases for other supercombinators
@@ -127,7 +127,7 @@ lift = snd . lift' (0, mempty)
           -- insert the resulting supercombinator into the environment
           scs' = Map.insert ("_" <> show i) sc scs
           lam' = foldr (flip App . Var) (Global i) fvs
-      in          -- replace the lambda with a variable applied to the free vars and repeat
+      in            -- replace the lambda with a variable applied to the free vars and repeat
           lift' (i + 1, scs') (hole lam')
     Nothing -> (i, Map.insert "_main" (mkSC [] expr) scs)
 
