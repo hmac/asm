@@ -3,6 +3,7 @@
 
 module Main where
 
+import Data.Functor ((<&>))
 import Control.Applicative ((<|>))
 import Control.Monad (replicateM, void)
 import Control.Monad.Trans.State.Strict (State, evalState, get, put)
@@ -32,12 +33,17 @@ import Compile (compileSC, r0, argReg)
 main :: IO ()
 main = do
   args <- getArgs
+  let multi = parseInput <&> multiLambda
+      lift_ = multi <&> lift
+      super = lift_ <&> Map.map supercombinate
+      asm = super <&> printProgram
   case args of
-    [] -> asm
     ["parse"] -> parseInput >>= pPrint
-    ["asm"] -> asm
-    ["lift"] -> lambdaLift >>= pPrint
+    ["multi"] -> multi >>= pPrint
+    ["lift"]  -> lift_ >>= pPrint
     ["super"] -> super >>= pPrint
+    ["asm"]   -> asm >>= putStrLn
+    []        -> asm >>= putStrLn
     ["web", port] -> do
       putStrLn $ "Launching HTTP server on port " <> port
       launchWebServer port
@@ -63,26 +69,24 @@ parseInput = do
     Left err -> putStrLn (errorBundlePretty err) >> exitWith (ExitFailure 1)
     Right expr -> pure expr
 
-lambdaLift = do
-  expr <- parseInput
-  pure (lift expr)
-
-super = do
-  defs <- lambdaLift
-  pure $ Map.map supercombinate defs
-
-asm = do
-  scs <- super
-  putStrLn $ printProgram scs
-
--- Idea:
--- Convert lambda calculus with just integers into assembly
--- 1. Fully lambda lift
--- 2. Convert each (now top-level) function to an assembly function
+-- Convert lambda calculus with just integers into assembly.
+--
+-- Pipeline
+-- --------
+-- 1. MultiLambda: Merge nested lambdas
+-- 2. Lift: Lift lambdas to top-level supercombinators
+-- 3. Supercombinate: Change type from Exp to SExp (TODO: merge with above)
+-- 4. Compile: Convert each supercombinator to a sequence of assembly instructions
 
 -- Multi-lambda pass: convert \w x. \y z. into \w x y z.
 multiLambda :: Exp -> Exp
-multiLambda = undefined
+multiLambda = \case
+  Lam xs e -> case multiLambda e of
+                Lam ys e -> Lam (xs<>ys) e
+                e -> Lam xs e
+  App e1 e2 -> App (multiLambda e1) (multiLambda e2)
+  Prim p e1 e2 -> Prim p (multiLambda e1) (multiLambda e2)
+  e -> e
 
 -- Simple algorithm:
 -- 1. If there are no lambda abstractions, finish
