@@ -74,22 +74,29 @@ compile env@(gamma, (s : delta), m, xi) r (SPrim p e1 e2) =
 -- Applications
 -- ------------
 -- Compile each argument to the corresponding arg register (pushing it first)
+-- If the argument is already in the right register, don't push it
 -- Call the function
 -- Move the the result to the given register
 -- Pop the arg registers
 -- TODO: clean this up
 compile (gamma, delta, m, xi) r (SApp f args) =
-  let (prelude, _) = foldl
-        (\(is, m') (e, i) ->
-          let ri = argReg i
-              m'' :: Renaming
-              m'' = ((ri, Stack (xi + i - 1)) : m')
-          in  (Push ri : compile (gamma, delta, m'', xi + i) ri e, m'')
+  let (prelude, postlude, _) = foldl
+          -- If the arg is a variable which happens to be in the right register, just leave it as-is
+          -- Otherwise, push the register, put the argument in it, then pop it after the call
+        (\(pre, post, m') (e, i) -> case e of
+          SVar x | Just r <- lookup x gamma, r == argReg i -> ([], [], m')
+          _ ->
+            let ri = argReg i
+                m'' :: Renaming
+                m'' = ((ri, Stack (xi + i - 1)) : m')
+            in  ( pre <> (Push ri : compile (gamma, delta, m'', xi + i) ri e)
+                , Pop ri : post
+                , m''
+                )
         )
-        ([], m)
+        ([], [], m)
         (zip args [1 ..])
-      postlude = map (\(_, i) -> Pop (argReg i)) $ reverse $ zip args [1 ..]
-      call     = case f of
+      call = case f of
         SVar x -> case lookup x gamma of
           Nothing -> error $ "Unknown variable " <> show x
           Just xr -> [Call (R (Reg xr)), Mov (R (Reg r)) (R (Reg r0))]
