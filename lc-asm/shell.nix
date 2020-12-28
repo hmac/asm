@@ -12,7 +12,7 @@ pkgs.mkShell {
       pkgs.http-types
     ]))
     haskellPackages.hlint
-    haskellPackages.ormolu
+    haskellPackages.brittany
     haskellPackages.ghcid
     nixfmt
   ];
