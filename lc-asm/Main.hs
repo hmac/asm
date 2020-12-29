@@ -4,16 +4,7 @@
 module Main where
 
 import           Data.Functor                   ( (<&>) )
-import           Control.Applicative            ( (<|>) )
-import           Control.Monad                  ( replicateM
-                                                , void
-                                                )
-import           Control.Monad.Trans.State.Strict
-                                                ( State
-                                                , evalState
-                                                , get
-                                                , put
-                                                )
+import           Control.Monad                  ( void )
 import           Data.Functor                   ( ($>) )
 import           Data.Map.Strict                ( Map )
 import qualified Data.Map.Strict               as Map
@@ -41,10 +32,7 @@ import           Data.ByteString.Lazy.Char8     ( unpack
                                                 )
 
 import           Types
-import           Compile                        ( compileSC
-                                                , r0
-                                                , argReg
-                                                )
+import           Compile                        ( compileSC )
 
 main :: IO ()
 main = do
@@ -81,6 +69,7 @@ launchWebServer portStr = Warp.run (read portStr) app
             asm    = printProgram $ Map.map compileSC supers
         Wai.responseLBS status200 mempty (pack asm)
 
+parseInput :: IO Exp
 parseInput = do
   input <- getContents
   case parse (parseExp <* eof) "<stdin>" input of
@@ -103,8 +92,8 @@ parseInput = do
 multiLambda :: Exp -> Exp
 multiLambda = \case
   Lam xs e -> case multiLambda e of
-    Lam ys e -> Lam (xs <> ys) e
-    e        -> Lam xs e
+    Lam ys e' -> Lam (xs <> ys) e'
+    e'        -> Lam xs e'
   App e1 e2    -> App (multiLambda e1) (multiLambda e2)
   Prim p e1 e2 -> Prim p (multiLambda e1) (multiLambda e2)
   e            -> e
@@ -122,17 +111,17 @@ lift = snd . lift' (0, mempty)
     -- The Int is a counter for naming new definitions
   lift' :: (Int, Map String SC) -> Exp -> (Int, Map String SC)
   lift' (i, scs) expr = case findLambda expr of
-    Just (lam@(Lam xs body), hole) ->
+    Just (xs, body, hole) ->
       -- get the free variables of the lambda body
-      let fvs  = fv lam
+      let fvs  = fv body
           -- abstract each as a parameter
           sc   = mkSC (fvs <> xs) body
           -- insert the resulting supercombinator into the environment
           scs' = Map.insert ("_" <> show i) sc scs
           lam' = foldr (flip App . Var) (Global i) fvs
-      in                           -- replace the lambda with a variable applied to the free vars and repeat
+      in                                                    -- replace the lambda with a variable applied to the free vars and repeat
           lift' (i + 1, scs') (hole lam')
-    Nothing -> (i, Map.insert "_main" (mkSC [] expr) scs)
+    _ -> (i, Map.insert "_main" (mkSC [] expr) scs)
 
 -- Make a supercombinator from a list of bound variable and an expression body
 -- The body must not contain any lambdas
@@ -146,6 +135,7 @@ mkSC vars body = (vars, convert body)
     Var    x     -> SVar x
     Global i     -> SGlobal i
     Int    i     -> SInt i
+    Bool   b     -> SBool b
     Prim p e1 e2 -> SPrim p (convert e1) (convert e2)
     e            -> error $ "Unexpected: " <> show e
 
@@ -173,7 +163,7 @@ removeRedundant scs =
 --   $1 = $2
 isRedundant :: SC -> Bool
 isRedundant ([], e) = case e of
-  SApp (SGlobal i) [] -> True
+  SApp (SGlobal _) [] -> True
   _                   -> False
 isRedundant _ = False
 
@@ -205,18 +195,19 @@ test =
           pPrint actual
 
 -- Find the first lambda which has no lambdas in its body
-findLambda :: Exp -> Maybe (Exp, Exp -> Exp)
+findLambda :: Exp -> Maybe ([String], Exp, Exp -> Exp)
 findLambda = go id
  where
-  go :: (Exp -> Exp) -> Exp -> Maybe (Exp, Exp -> Exp)
+  go :: (Exp -> Exp) -> Exp -> Maybe ([String], Exp, Exp -> Exp)
   go hole = \case
     Int    _ -> Nothing
+    Bool   _ -> Nothing
     Var    _ -> Nothing
     Global _ -> Nothing
     Prim p e1 e2 ->
       go (hole . flip (Prim p) e2) e1 <|> go (hole . Prim p e1) e2
     App e1 e2 -> go (hole . flip App e2) e1 <|> go (hole . App e1) e2
-    Lam x  e  -> go (hole . Lam x) e <|> Just (Lam x e, hole)
+    Lam x  e  -> go (hole . Lam x) e <|> Just (x, e, hole)
 
 -- Calculate the free variable of an expression
 fv :: Exp -> [String]
@@ -228,6 +219,7 @@ fv = go []
           | otherwise      -> [v]
     Lam xs e     -> go (xs <> bound) e
     Int    _     -> []
+    Bool   _     -> []
     Global _     -> []
     App e1 e2    -> go bound e1 <> go bound e2
     Prim _ e1 e2 -> go bound e1 <> go bound e2
@@ -278,9 +270,10 @@ printProgram defs =
 type Parser = Parsec Void String
 
 parseExp :: Parser Exp
-parseExp = try parseApp <|> parseLam <|> parseVar <|> parseInt
+parseExp = try parseApp <|> parseLam <|> parseInt <|> parseBool <|> parseVar
 
-parseNonApp = parseLam <|> parseVar <|> parseInt <|> parens parseExp
+parseNonApp =
+  parseLam <|> parseInt <|> parseBool <|> parseVar <|> parens parseExp
 
 parseApp = do
   appOrPrim <- (Left <$> parseNonApp) <|> (Right <$> parsePrim)
@@ -315,6 +308,11 @@ parsePrim =
     <|> ((string "*" <* space) $> Mul)
 
 parseInt = Int . read <$> some digitChar <* space
+
+parseBool = parseTrue <|> parseFalse
+ where
+  parseTrue  = string "True" >> void space $> Bool True
+  parseFalse = string "False" >> void space $> Bool True
 
 parens :: Parser a -> Parser a
 parens = between (string "(" >> space) (string ")" >> space)

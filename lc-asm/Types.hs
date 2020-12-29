@@ -6,6 +6,7 @@ data Exp
   | Var String
   | Global Int
   | Int Int
+  | Bool Bool
   | Prim Prim Exp Exp
   deriving (Eq, Show)
 
@@ -23,6 +24,7 @@ data SExp
   | SVar String
   | SGlobal Int
   | SInt Int
+  | SBool Bool
   | SPrim Prim SExp SExp
   deriving (Eq, Show)
 
@@ -30,7 +32,7 @@ data Asm = Mov Op Op | IAdd Op Op | ISub Op Op | IMul Op Op | Call Op | Ret | Pu
   deriving (Eq, Show)
 
 -- Operands are registers, labels, or literal integers
-data Op = R PseudoReg | L Int | S Int | I Int
+data Op = R PseudoReg | L Int | I Int
   deriving (Eq, Show)
 
 data Register = Register String

@@ -21,12 +21,14 @@ compileSC :: SC -> [Asm]
 compileSC (vars, e) =
   let gamma = zipWith (\v i -> (v, argReg i)) vars [1 ..]
       delta =
-        Register "r10"
-          : Register "r11"
-          : Register "r12"
-          : Register "r13"
-          : delta
+          Register "r10"
+            : Register "r11"
+            : Register "r12"
+            : Register "r13"
+            : delta
   in  compile (gamma, delta, mempty, 0) r0 e <> [Ret]
+
+-- TODO: use a ring type (infinite circular list) for delta
 
 -- This depends on the target architecture
 -- and should really be configurable
@@ -43,7 +45,7 @@ compile :: Env -> Register -> SExp -> [Asm]
 -- ---------
 -- Look up the variable in the context
 -- If it's been pushed onto the stack, look up the correct stack address
-compile (gamma, delta, m, xi) r (SVar x) =
+compile (gamma, _delta, m, _xi) r (SVar x) =
   let register :: PseudoReg
       register = case lookup x gamma of
         Nothing  -> error $ "Unknown variable " <> show x
@@ -55,11 +57,16 @@ compile (gamma, delta, m, xi) r (SVar x) =
 -- Global labels
 -- -------------
 -- This is just an application with no arguments.
-compile env r (SGlobal i) = compile env r (SApp (SGlobal i) [])
+compile env r (SGlobal i    ) = compile env r (SApp (SGlobal i) [])
 
 -- Integers
 -- --------
-compile _   r (SInt    i) = [Mov (R (Reg r)) (I i)]
+compile _   r (SInt    i    ) = [Mov (R (Reg r)) (I i)]
+
+-- Booleans
+-- --------
+compile _   r (SBool   True ) = [Mov (R (Reg r)) (I 1)]
+compile _   r (SBool   False) = [Mov (R (Reg r)) (I 0)]
 
 -- Binary primitives
 -- -----------------
