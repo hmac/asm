@@ -4,7 +4,10 @@
 module Main where
 
 import           Data.Functor                   ( (<&>) )
-import           Control.Monad                  ( void )
+import           Data.List                      ( nub )
+import           Control.Monad                  ( void
+                                                , guard
+                                                )
 import           Data.Functor                   ( ($>) )
 import           Data.Map.Strict                ( Map )
 import qualified Data.Map.Strict               as Map
@@ -119,7 +122,7 @@ lift = snd . lift' (0, mempty)
           -- insert the resulting supercombinator into the environment
           scs' = Map.insert ("_" <> show i) sc scs
           lam' = foldr (flip App . Var) (Global i) fvs
-      in                                                    -- replace the lambda with a variable applied to the free vars and repeat
+      in                                                                       -- replace the lambda with a variable applied to the free vars and repeat
           lift' (i + 1, scs') (hole lam')
     _ -> (i, Map.insert "_main" (mkSC [] expr) scs)
 
@@ -137,6 +140,7 @@ mkSC vars body = (vars, convert body)
     Int    i     -> SInt i
     Bool   b     -> SBool b
     Prim p e1 e2 -> SPrim p (convert e1) (convert e2)
+    If   b t  e  -> SIf (convert b) (convert t) (convert e)
     e            -> error $ "Unexpected: " <> show e
 
 -- Convert
@@ -208,10 +212,14 @@ findLambda = go id
       go (hole . flip (Prim p) e2) e1 <|> go (hole . Prim p e1) e2
     App e1 e2 -> go (hole . flip App e2) e1 <|> go (hole . App e1) e2
     Lam x  e  -> go (hole . Lam x) e <|> Just (x, e, hole)
+    If b t e ->
+      go (hole . (\b' -> If b' t e)) b
+        <|> go (hole . (\t' -> If b t' e)) t
+        <|> go (hole . If b t)             e
 
 -- Calculate the free variable of an expression
 fv :: Exp -> [String]
-fv = go []
+fv = nub . go []
  where
   go :: [String] -> Exp -> [String]
   go bound = \case
@@ -223,29 +231,35 @@ fv = go []
     Global _     -> []
     App e1 e2    -> go bound e1 <> go bound e2
     Prim _ e1 e2 -> go bound e1 <> go bound e2
+    If   b t  e  -> go bound b <> go bound t <> go bound e
 
 -- Calculate the free variables of a SExp
 sfv :: SExp -> [String]
-sfv = go
+sfv = nub . go
  where
   go :: SExp -> [String]
   go = \case
     SVar    v     -> [v]
     SInt    _     -> []
+    SBool   _     -> []
     SGlobal _     -> []
     SApp _ args   -> concatMap go args
     SPrim _ e1 e2 -> go e1 <> go e2
+    SIf   b t  e  -> go b <> go t <> go e
 
 printAsm :: Asm -> String
 printAsm = \case
-  Mov  o1 o2 -> "mov " <> printOp o1 <> ", " <> printOp o2
-  IAdd o1 o2 -> "add " <> printOp o1 <> ", " <> printOp o2
-  ISub o1 o2 -> "sub " <> printOp o1 <> ", " <> printOp o2
-  IMul o1 o2 -> "imul " <> printOp o1 <> ", " <> printOp o2
-  Push r     -> "push " <> printReg r
-  Pop  r     -> "pop " <> printReg r
-  Call o     -> "call " <> printOp o
-  Ret        -> "ret"
+  Mov  o1 o2  -> "mov " <> printOp o1 <> ", " <> printOp o2
+  IAdd o1 o2  -> "add " <> printOp o1 <> ", " <> printOp o2
+  ISub o1 o2  -> "sub " <> printOp o1 <> ", " <> printOp o2
+  IMul o1 o2  -> "imul " <> printOp o1 <> ", " <> printOp o2
+  Push r      -> "push " <> printReg r
+  Pop  r      -> "pop " <> printReg r
+  Call o      -> "call " <> printOp o
+  Ret         -> "ret"
+  Jmp   (I i) -> "jmp " <> "[rip+" <> show i <> "]"
+  JmpEq (I i) -> "je " <> "[rip+" <> show i <> "]"
+  Cmp o1 o2   -> "cmp " <> printOp o1 <> ", " <> printOp o2
 
 printOp :: Op -> String
 printOp = \case
@@ -270,7 +284,8 @@ printProgram defs =
 type Parser = Parsec Void String
 
 parseExp :: Parser Exp
-parseExp = try parseApp <|> parseLam <|> parseInt <|> parseBool <|> parseVar
+parseExp =
+  try parseApp <|> parseLam <|> parseInt <|> parseBool <|> parseIf <|> parseVar
 
 parseNonApp =
   parseLam <|> parseInt <|> parseBool <|> parseVar <|> parens parseExp
@@ -295,11 +310,14 @@ parseLam = do
 
 parseVar = Var <$> parseVarString
 
-parseVarString = do
+parseVarString = try $ do
   a  <- letterChar
   as <- many alphaNumChar
   void space
+  guard (a : as `notElem` keywords)
   pure (a : as)
+
+keywords = ["if", "then", "else", "True", "False"]
 
 parsePrim :: Parser Prim
 parsePrim =
@@ -313,6 +331,19 @@ parseBool = parseTrue <|> parseFalse
  where
   parseTrue  = string "True" >> void space $> Bool True
   parseFalse = string "False" >> void space $> Bool True
+
+parseIf :: Parser Exp
+parseIf = do
+  string "if"
+  void space
+  b <- parseExp
+  string "then"
+  void space
+  t <- parseExp
+  string "else"
+  void space
+  e <- parseExp
+  pure $ If b t e
 
 parens :: Parser a -> Parser a
 parens = between (string "(" >> space) (string ")" >> space)

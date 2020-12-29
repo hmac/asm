@@ -108,7 +108,28 @@ compile (gamma, delta, m, xi) r (SApp f args) =
           Nothing -> error $ "Unknown variable " <> show x
           Just xr -> [Call (R (Reg xr)), Mov (R (Reg r)) (R (Reg r0))]
         SGlobal i -> [Call (L i), Mov (R (Reg r)) (R (Reg r0))]
+        _         -> error $ "Unexpected application head: " <> show f
   in  prelude <> call <> postlude
+
+-- If expressions
+-- --------------
+-- Compile to: [condition]
+--             compare <reg> 0
+--             jump-if-equal <size of [then] + 2>
+--             [then]
+--             jump <size of [else] + 1>
+--             [else]
+--
+-- We can re-use the same register for all three sections
+compile env r (SIf b t e) =
+  let condition = compile env r b
+      then_     = compile env r t
+      else_     = compile env r e
+  in  condition
+        <> [Cmp (R (Reg r)) (I 0), JmpEq (I (length then_ + 2))]
+        <> then_
+        <> [Jmp (I (length else_ + 1))]
+        <> else_
 
 binaryPrim :: Prim -> Register -> Register -> [Asm]
 binaryPrim Add r1 r2 = [IAdd (R (Reg r1)) (R (Reg r2))]

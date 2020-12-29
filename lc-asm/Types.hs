@@ -8,6 +8,7 @@ data Exp
   | Int Int
   | Bool Bool
   | Prim Prim Exp Exp
+  | If Exp Exp Exp
   deriving (Eq, Show)
 
 data Prim = Add | Sub | Mul
@@ -26,9 +27,22 @@ data SExp
   | SInt Int
   | SBool Bool
   | SPrim Prim SExp SExp
+  | SIf SExp SExp SExp
   deriving (Eq, Show)
 
-data Asm = Mov Op Op | IAdd Op Op | ISub Op Op | IMul Op Op | Call Op | Ret | Push Register | Pop Register
+data Asm
+  = Mov Op Op
+  | IAdd Op Op
+  | ISub Op Op
+  | IMul Op Op
+  | Call Op
+  | Ret
+  | Push Register
+  | Pop Register
+  | Cmp Op Op
+  -- jumps expect an integer operand, representing an offset from the instruction pointer
+  | JmpEq Op
+  | Jmp Op
   deriving (Eq, Show)
 
 -- Operands are registers, labels, or literal integers
