@@ -11,7 +11,7 @@ data Exp
   | If Exp Exp Exp
   deriving (Eq, Show)
 
-data Prim = Add | Sub | Mul
+data Prim = Add | Sub | Mul | Eq | Gt | Lt
   deriving (Eq, Show)
 
 -- Supercombinator
@@ -40,9 +40,10 @@ data Asm
   | Push Register
   | Pop Register
   | Cmp Op Op
-  -- jumps expect an integer operand, representing an offset from the instruction pointer
-  | JmpEq Op
   | Jmp Op
+  | JmpEq Op
+  | JmpGt Op
+  | JmpLt Op
   | Label String
   deriving (Eq, Show)
 

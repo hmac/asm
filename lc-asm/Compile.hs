@@ -87,7 +87,8 @@ compile _ r (SBool False) = pure [Mov (R (Reg r)) (I 0)]
 compile env@(gamma, (s : delta), m, xi) r (SPrim p e1 e2) = do
   i1 <- compile env r e1
   i2 <- compile (gamma, delta, ((s, Stack xi) : m), xi + 1) s e2
-  pure $ i1 <> [Push s] <> i2 <> binaryPrim p r s <> [Pop s]
+  ip <- binaryPrim p r s
+  pure $ i1 <> [Push s] <> i2 <> ip <> [Pop s]
 
 -- Applications
 -- ------------
@@ -152,7 +153,26 @@ newLabel = do
   put (i + 1)
   pure $ "__" <> show i
 
-binaryPrim :: Prim -> Register -> Register -> [Asm]
-binaryPrim Add r1 r2 = [IAdd (R (Reg r1)) (R (Reg r2))]
-binaryPrim Sub r1 r2 = [ISub (R (Reg r1)) (R (Reg r2))]
-binaryPrim Mul r1 r2 = [IMul (R (Reg r1)) (R (Reg r2))]
+binaryPrim :: Prim -> Register -> Register -> Gen [Asm]
+binaryPrim Add r1 r2 = pure [IAdd (R (Reg r1)) (R (Reg r2))]
+binaryPrim Sub r1 r2 = pure [ISub (R (Reg r1)) (R (Reg r2))]
+binaryPrim Mul r1 r2 = pure [IMul (R (Reg r1)) (R (Reg r2))]
+binaryPrim Eq  r1 r2 = binaryBooleanPrim JmpEq r1 r2
+binaryPrim Gt  r1 r2 = binaryBooleanPrim JmpGt r1 r2
+binaryPrim Lt  r1 r2 = binaryBooleanPrim JmpLt r1 r2
+
+-- Primitives like =, >, < all have the same form, differing only in the kind
+-- of jump instruction they use
+binaryBooleanPrim :: (Op -> Asm) -> Register -> Register -> Gen [Asm]
+binaryBooleanPrim p r1 r2 = do
+  true <- newLabel
+  end  <- newLabel
+  pure
+    [ Cmp (R (Reg r1)) (R (Reg r2))
+    , p (L true)
+    , Mov (R (Reg r1)) (I 0)
+    , Jmp (L end)
+    , Label true
+    , Mov (R (Reg r1)) (I 1)
+    , Label end
+    ]

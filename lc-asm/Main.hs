@@ -128,7 +128,7 @@ lift = snd . lift' (0, mempty)
           -- insert the resulting supercombinator into the environment
           scs' = Map.insert ("_" <> show i) sc scs
           lam' = foldr (flip App . Var) (Global i) fvs
-      in                                                                                                      -- replace the lambda with a variable applied to the free vars and repeat
+      in                                                                                                         -- replace the lambda with a variable applied to the free vars and repeat
           lift' (i + 1, scs') (hole lam')
     _ -> (i, Map.insert "_main" (mkSC [] expr) scs)
 
@@ -268,10 +268,12 @@ printAsm = \case
   Pop  r     -> "    pop " <> printReg r
   Call o     -> "    call " <> printOp o
   Ret        -> "    ret"
+  Label l    -> l <> ":"
   Cmp o1 o2  -> "    cmp " <> printOp o1 <> ", " <> printOp o2
   Jmp   o    -> "    jmp " <> printOp o
   JmpEq o    -> "    je " <> printOp o
-  Label l    -> l <> ":"
+  JmpGt o    -> "    jg " <> printOp o
+  JmpLt o    -> "    jl " <> printOp o
 
 printOp :: Op -> String
 printOp = \case
@@ -340,6 +342,9 @@ parsePrim =
   ((string "+" <* space) $> Add)
     <|> ((string "-" <* space) $> Sub)
     <|> ((string "*" <* space) $> Mul)
+    <|> ((string "=" <* space) $> Eq)
+    <|> ((string ">" <* space) $> Gt)
+    <|> ((string "<" <* space) $> Lt)
 
 parseInt :: Parser Exp
 parseInt = Int . read <$> some digitChar <* space
