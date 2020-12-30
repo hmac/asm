@@ -10,6 +10,7 @@ data Exp
   | Prim Prim Exp Exp
   | If Exp Exp Exp
   | Not Exp
+  | Fix String Exp
   deriving (Eq, Show)
 
 data Prim = Add | Sub | Mul | Eq | Gt | Lt | And | Or

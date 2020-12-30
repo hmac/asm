@@ -62,17 +62,16 @@ compile (gamma, _delta, m, _xi) r (SVar x) =
 
 -- Global labels
 -- -------------
--- This is just an application with no arguments.
-compile env r (SGlobal i    ) = compile env r (SApp (SGlobal i) [])
+compile _ r (SGlobal i    ) = pure [Mov (R (Reg r)) (L i)]
 
 -- Integers
 -- --------
-compile _   r (SInt    i    ) = pure [Mov (R (Reg r)) (I i)]
+compile _ r (SInt    i    ) = pure [Mov (R (Reg r)) (I i)]
 
 -- Booleans
 -- --------
-compile _   r (SBool   True ) = pure [Mov (R (Reg r)) (I 1)]
-compile _   r (SBool   False) = pure [Mov (R (Reg r)) (I 0)]
+compile _ r (SBool   True ) = pure [Mov (R (Reg r)) (I 1)]
+compile _ r (SBool   False) = pure [Mov (R (Reg r)) (I 0)]
 
 -- Binary primitives
 -- -----------------
@@ -101,13 +100,7 @@ compile env r (SNot e) = do
 -- Pop the arg registers
 -- TODO: clean this up
 compile (gamma, delta, m, xi) r (SApp f args) = do
-  let call = case f of
-        SVar x -> case lookup x gamma of
-          Nothing -> error $ "Unknown variable " <> show x
-          Just xr -> [Call (R (Reg xr)), Mov (R (Reg r)) (R (Reg r0))]
-        SGlobal l -> [Call (L l), Mov (R (Reg r)) (R (Reg r0))]
-        _         -> error $ "Unexpected application head: " <> show f
-  (prelude, postlude, _) <- foldM
+  (prelude, postlude, m') <- foldM
     (\(pre, post, m') (e, i) -> case e of
       -- If the arg is a variable which happens to be in the right register, just leave it as-is
       SVar x | Just xr <- lookup x gamma, xr == argReg i -> pure ([], [], m')
@@ -117,10 +110,18 @@ compile (gamma, delta, m, xi) r (SApp f args) = do
             m'' = ((ri, Stack (xi + i - 1)) : m') :: Renaming
         in  do
               is <- compile (gamma, delta, m'', xi + i) ri e
-              pure (pre <> is, Pop ri : post, m'')
+              pure (pre <> (Push ri : is), Pop ri : post, m'')
     )
     ([], [], m)
     (zip args [1 ..])
+  let call = case f of
+        SVar x -> case lookup x gamma of
+          Nothing -> error $ "Unknown variable " <> show x
+          Just xr -> case lookup xr m' of
+            Just xr' -> [Call (R xr'), Mov (R (Reg r)) (R (Reg r0))]
+            Nothing  -> [Call (R (Reg xr)), Mov (R (Reg r)) (R (Reg r0))]
+        SGlobal l -> [Call (L l), Mov (R (Reg r)) (R (Reg r0))]
+        _         -> error $ "Unexpected application head: " <> show f
   pure $ prelude <> call <> postlude
 
 -- If expressions

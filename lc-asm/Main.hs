@@ -118,7 +118,8 @@ lift = snd . lift' (0, mempty)
     -- The Int is a counter for naming new definitions
   lift' :: (Int, Map String SC) -> Exp -> (Int, Map String SC)
   lift' (i, scs) expr = case findLambda expr of
-    Just (xs, body, hole) ->
+    -- We've found a lambda
+    Just (Left (xs, body, hole)) ->
       -- get the free variables of the lambda body
       let fvs  = fv body \\ xs
           -- abstract each as a parameter
@@ -126,12 +127,46 @@ lift = snd . lift' (0, mempty)
           -- insert the resulting supercombinator into the environment
           scs' = Map.insert ("_" <> show i) sc scs
           lam' = foldr (flip App . Var) (Global i) fvs
-      in                                                                                                                           -- replace the lambda with a variable applied to the free vars and repeat
+      in                                                                                                                                                                            -- replace the lambda with a variable applied to the free vars and repeat
           lift' (i + 1, scs') (hole lam')
-    _ -> (i, Map.insert "_main" (mkSC [] expr) scs)
+    -- We've found a fixpoint
+    Just (Right (x, body, hole)) ->
+      let
+          -- name this supercombinator
+          scName = "_" <> show i
+          -- rename any references to x in the body to refer to the supercombinator
+          body'  = rename x i body
+          -- get the free variables of the body
+          fvs    = fv body' \\ [scName]
+          -- abstract each as a parameter
+          sc     = mkSC fvs body'
+          -- insert the resulting supercombinator into the environment
+          scs'   = Map.insert scName sc scs
+          lam'   = foldr (flip App . Var) (Global i) fvs
+      in                                                                                                                                                                            -- replace the lambda with a variable applied to the free vars and repeat
+          lift' (i + 1, scs') (hole lam')
+    Nothing -> (i, Map.insert "_main" (mkSC [] expr) scs)
+
+rename :: String -> Int -> Exp -> Exp
+rename x y = go
+ where
+  go = \case
+    Var z | z == x    -> Global y
+          | otherwise -> Var z
+    Lam zs e | x `elem` zs -> Lam zs e
+             | otherwise   -> Lam zs (go e)
+    Fix z e | z == x    -> Fix z e
+            | otherwise -> Fix x (go e)
+    App e1 e2    -> App (go e1) (go e2)
+    If   b t  e  -> If (go b) (go t) (go e)
+    Prim p e1 e2 -> Prim p (go e1) (go e2)
+    Not    e     -> Not (go e)
+    Global l     -> Global l
+    Int    n     -> Int n
+    Bool   b     -> Bool b
 
 -- Make a supercombinator from a list of bound variable and an expression body
--- The body must not contain any lambdas
+-- The body must not contain any lambdas or lets
 mkSC :: [String] -> Exp -> SC
 mkSC vars body = (vars, convert body)
  where
@@ -146,6 +181,8 @@ mkSC vars body = (vars, convert body)
     Prim p e1 e2 -> SPrim p (convert e1) (convert e2)
     If   b t  e  -> SIf (convert b) (convert t) (convert e)
     Not e        -> SNot (convert e)
+    e@(Fix _ _) ->
+      error $ "Unexpected fixpoint in supercombinator body: " <> show e
     e@(Lam _ _) ->
       error $ "Unexpected lambda in supercombinator body: " <> show e
 
@@ -209,11 +246,17 @@ test =
           putStrLn "Actual:"
           pPrint actual
 
--- Find the first lambda which has no lambdas in its body
-findLambda :: Exp -> Maybe ([String], Exp, Exp -> Exp)
+-- Find the first lambda or fixpoint which has no lambdas (or fixpoints) in its body
+-- Left is Lambda, right is fixpoint
+findLambda
+  :: Exp -> Maybe (Either ([String], Exp, Exp -> Exp) (String, Exp, Exp -> Exp))
 findLambda = go id
  where
-  go :: (Exp -> Exp) -> Exp -> Maybe ([String], Exp, Exp -> Exp)
+  go
+    :: (Exp -> Exp)
+    -> Exp
+    -> Maybe
+         (Either ([String], Exp, Exp -> Exp) (String, Exp, Exp -> Exp))
   go hole = \case
     Int    _ -> Nothing
     Bool   _ -> Nothing
@@ -223,11 +266,12 @@ findLambda = go id
     Prim p e1 e2 ->
       go (hole . flip (Prim p) e2) e1 <|> go (hole . Prim p e1) e2
     App e1 e2 -> go (hole . flip App e2) e1 <|> go (hole . App e1) e2
-    Lam x  e  -> go (hole . Lam x) e <|> Just (x, e, hole)
     If b t e ->
       go (hole . (\b' -> If b' t e)) b
         <|> go (hole . (\t' -> If b t' e)) t
         <|> go (hole . If b t)             e
+    Lam x e -> go (hole . Lam x) e <|> Just (Left (x, e, hole))
+    Fix x e -> go (hole . Fix x) e <|> Just (Right (x, e, hole))
 
 -- Calculate the free variable of an expression
 fv :: Exp -> [String]
@@ -238,6 +282,7 @@ fv = nub . go []
     Var v | v `elem` bound -> []
           | otherwise      -> [v]
     Lam xs e     -> go (xs <> bound) e
+    Fix x  e     -> go (x : bound) e
     Int    _     -> []
     Bool   _     -> []
     Global _     -> []
@@ -304,7 +349,7 @@ printProgram defs =
 type Parser = Parsec Void String
 
 parseExp :: Parser Exp
-parseExp = try parseApp <|> parseIf <|> parseNonApp
+parseExp = try parseApp <|> parseIf <|> parseLet <|> parseNonApp
 
 parseNonApp :: Parser Exp
 parseNonApp =
@@ -347,7 +392,19 @@ parseVarString = try $ do
   pure (a : as)
 
 keywords :: [String]
-keywords = ["if", "then", "else", "True", "False", "not", "and", "or"]
+keywords =
+  [ "if"
+  , "then"
+  , "else"
+  , "True"
+  , "False"
+  , "not"
+  , "and"
+  , "or"
+  , "fix"
+  , "let"
+  , "in"
+  ]
 
 parsePrim :: Parser Prim
 parsePrim =
@@ -388,6 +445,21 @@ parseIf = do
   void space
   e <- parseExp
   pure $ If b t e
+
+-- Lets are recursive and are converted into a combination of lambda and fixpoint:
+-- let x = e1 in e2 ==> (\x. e2) (fix x. e1)
+parseLet :: Parser Exp
+parseLet = do
+  _ <- string "let"
+  void space
+  x <- parseVarString
+  _ <- string "="
+  void space
+  e1 <- parseExp
+  _  <- string "in"
+  void space
+  e2 <- parseExp
+  pure $ App (Lam [x] e2) (Fix x e1)
 
 parens :: Parser a -> Parser a
 parens = between (string "(" >> space) (string ")" >> space)
