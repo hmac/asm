@@ -43,10 +43,11 @@ data Asm
   -- jumps expect an integer operand, representing an offset from the instruction pointer
   | JmpEq Op
   | Jmp Op
+  | Label String
   deriving (Eq, Show)
 
 -- Operands are registers, labels, or literal integers
-data Op = R PseudoReg | L Int | I Int
+data Op = R PseudoReg | L String | I Int
   deriving (Eq, Show)
 
 data Register = Register String

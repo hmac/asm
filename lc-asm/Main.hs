@@ -4,7 +4,9 @@
 module Main where
 
 import           Data.Functor                   ( (<&>) )
-import           Data.List                      ( nub )
+import           Data.List                      ( nub
+                                                , (\\)
+                                                )
 import           Control.Monad                  ( void
                                                 , guard
                                                 )
@@ -12,6 +14,8 @@ import           Data.Functor                   ( ($>) )
 import           Data.Map.Strict                ( Map )
 import qualified Data.Map.Strict               as Map
 import           Data.Void                      ( Void )
+import           Control.Monad.Trans.State.Strict
+                                                ( runState )
 
 -- | CLI
 import           System.Environment             ( getArgs )
@@ -20,7 +24,9 @@ import           System.Exit                    ( ExitCode(..)
                                                 )
 
 -- | Parsing and printing
-import           Text.Megaparsec         hiding ( State )
+import           Text.Megaparsec         hiding ( State
+                                                , Label
+                                                )
 import           Text.Megaparsec.Char
 import           Text.Pretty.Simple             ( pPrint )
 
@@ -44,7 +50,7 @@ main = do
       lift_        = multi <&> lift
       eta'd        = lift_ <&> Map.map eta
       necessary    = eta'd <&> removeRedundant
-      asm          = necessary <&> Map.map compileSC
+      asm          = necessary <&> compileSupercombinators
       optimisedAsm = asm <&> Map.map removeRedundantInstructions
   case args of
     ["parse"    ] -> parseInput >>= pPrint
@@ -69,7 +75,7 @@ launchWebServer portStr = Warp.run (read portStr) app
         Wai.responseLBS status400 mempty errStr
       Right expr -> do
         let supers = removeRedundant $ Map.map eta $ lift $ multiLambda expr
-            asm    = printProgram $ Map.map compileSC supers
+            asm    = printProgram $ compileSupercombinators supers
         Wai.responseLBS status200 mempty (pack asm)
 
 parseInput :: IO Exp
@@ -116,13 +122,13 @@ lift = snd . lift' (0, mempty)
   lift' (i, scs) expr = case findLambda expr of
     Just (xs, body, hole) ->
       -- get the free variables of the lambda body
-      let fvs  = fv body
+      let fvs  = fv body \\ xs
           -- abstract each as a parameter
           sc   = mkSC (fvs <> xs) body
           -- insert the resulting supercombinator into the environment
           scs' = Map.insert ("_" <> show i) sc scs
           lam' = foldr (flip App . Var) (Global i) fvs
-      in                                                                       -- replace the lambda with a variable applied to the free vars and repeat
+      in                                                                                                      -- replace the lambda with a variable applied to the free vars and repeat
           lift' (i + 1, scs') (hole lam')
     _ -> (i, Map.insert "_main" (mkSC [] expr) scs)
 
@@ -170,6 +176,11 @@ isRedundant ([], e) = case e of
   SApp (SGlobal _) [] -> True
   _                   -> False
 isRedundant _ = False
+
+compileSupercombinators :: Map String SC -> Map String [Asm]
+compileSupercombinators = snd . Map.mapAccum
+  (\n sc -> let (asm, n') = runState (compileSC sc) n in (n', asm))
+  0
 
 removeRedundantInstructions :: [Asm] -> [Asm]
 removeRedundantInstructions = filter (not . redundant)
@@ -249,22 +260,23 @@ sfv = nub . go
 
 printAsm :: Asm -> String
 printAsm = \case
-  Mov  o1 o2  -> "mov " <> printOp o1 <> ", " <> printOp o2
-  IAdd o1 o2  -> "add " <> printOp o1 <> ", " <> printOp o2
-  ISub o1 o2  -> "sub " <> printOp o1 <> ", " <> printOp o2
-  IMul o1 o2  -> "imul " <> printOp o1 <> ", " <> printOp o2
-  Push r      -> "push " <> printReg r
-  Pop  r      -> "pop " <> printReg r
-  Call o      -> "call " <> printOp o
-  Ret         -> "ret"
-  Jmp   (I i) -> "jmp " <> "[rip+" <> show i <> "]"
-  JmpEq (I i) -> "je " <> "[rip+" <> show i <> "]"
-  Cmp o1 o2   -> "cmp " <> printOp o1 <> ", " <> printOp o2
+  Mov  o1 o2 -> "    mov " <> printOp o1 <> ", " <> printOp o2
+  IAdd o1 o2 -> "    add " <> printOp o1 <> ", " <> printOp o2
+  ISub o1 o2 -> "    sub " <> printOp o1 <> ", " <> printOp o2
+  IMul o1 o2 -> "    imul " <> printOp o1 <> ", " <> printOp o2
+  Push r     -> "    push " <> printReg r
+  Pop  r     -> "    pop " <> printReg r
+  Call o     -> "    call " <> printOp o
+  Ret        -> "    ret"
+  Cmp o1 o2  -> "    cmp " <> printOp o1 <> ", " <> printOp o2
+  Jmp   o    -> "    jmp " <> printOp o
+  JmpEq o    -> "    je " <> printOp o
+  Label l    -> l <> ":"
 
 printOp :: Op -> String
 printOp = \case
   R r -> printPseudoReg r
-  L i -> "_" <> show i
+  L l -> l
   I i -> show i
 
 printReg :: Register -> String
@@ -276,20 +288,20 @@ printPseudoReg (Stack i) = "[rsp+" <> show i <> "]"
 
 printProgram :: Map String [Asm] -> String
 printProgram defs =
-  foldMap (\(l, e) -> unlines $ (l <> ":") : map (("  " <>) . printAsm) e)
-    $ Map.toList defs
+  foldMap (\(l, e) -> unlines $ (l <> ":") : map (printAsm) e) $ Map.toList defs
 
 -- Parsing
 
 type Parser = Parsec Void String
 
 parseExp :: Parser Exp
-parseExp =
-  try parseApp <|> parseLam <|> parseInt <|> parseBool <|> parseIf <|> parseVar
+parseExp = try parseApp <|> parseIf <|> parseNonApp
 
+parseNonApp :: Parser Exp
 parseNonApp =
   parseLam <|> parseInt <|> parseBool <|> parseVar <|> parens parseExp
 
+parseApp :: Parser Exp
 parseApp = do
   appOrPrim <- (Left <$> parseNonApp) <|> (Right <$> parsePrim)
   case appOrPrim of
@@ -299,6 +311,7 @@ parseApp = do
     Right p -> do
       Prim p <$> parseNonApp <*> parseNonApp
 
+parseLam :: Parser Exp
 parseLam = do
   _ <- string "\\"
   void space
@@ -308,8 +321,10 @@ parseLam = do
   void space
   Lam xs <$> parseExp
 
+parseVar :: Parser Exp
 parseVar = Var <$> parseVarString
 
+parseVarString :: Parser String
 parseVarString = try $ do
   a  <- letterChar
   as <- many alphaNumChar
@@ -317,6 +332,7 @@ parseVarString = try $ do
   guard (a : as `notElem` keywords)
   pure (a : as)
 
+keywords :: [String]
 keywords = ["if", "then", "else", "True", "False"]
 
 parsePrim :: Parser Prim
@@ -325,8 +341,10 @@ parsePrim =
     <|> ((string "-" <* space) $> Sub)
     <|> ((string "*" <* space) $> Mul)
 
+parseInt :: Parser Exp
 parseInt = Int . read <$> some digitChar <* space
 
+parseBool :: Parser Exp
 parseBool = parseTrue <|> parseFalse
  where
   parseTrue  = string "True" >> void space $> Bool True
@@ -334,13 +352,13 @@ parseBool = parseTrue <|> parseFalse
 
 parseIf :: Parser Exp
 parseIf = do
-  string "if"
+  _ <- string "if"
   void space
   b <- parseExp
-  string "then"
+  _ <- string "then"
   void space
   t <- parseExp
-  string "else"
+  _ <- string "else"
   void space
   e <- parseExp
   pure $ If b t e
