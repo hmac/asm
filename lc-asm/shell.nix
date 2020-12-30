@@ -13,6 +13,7 @@ pkgs.mkShell {
       pkgs.wai
       pkgs.bytestring
       pkgs.http-types
+      pkgs.Stream
     ]))
     haskellPackages.hlint
     haskellPackages.brittany

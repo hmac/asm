@@ -7,6 +7,7 @@ import           Control.Monad.Trans.State.Strict
                                                 , get
                                                 , put
                                                 )
+import qualified Data.Stream                   as S
 
 -- Compiling supercombinators to assembly
 
@@ -14,7 +15,7 @@ type Env = (Ctx, ScratchRegs, Renaming, StackCounter)
 
 type Ctx = [(String, Register)]
 
-type ScratchRegs = [Register]
+type ScratchRegs = S.Stream Register
 
 type Renaming = [(Register, PseudoReg)]
 
@@ -28,17 +29,11 @@ type Gen a = State Int a
 compileSC :: SC -> Gen [Asm]
 compileSC (vars, e) =
   let gamma = zipWith (\v i -> (v, argReg i)) vars [1 ..]
-      delta =
-          Register "r10"
-            : Register "r11"
-            : Register "r12"
-            : Register "r13"
-            : delta
+      delta = S.cycle
+        [Register "r10", Register "r11", Register "r12", Register "r13"]
   in  do
         is <- compile (gamma, delta, mempty, 0) r0 e
         pure $ is <> [Ret]
-
--- TODO: use a ring type (infinite circular list) for delta
 
 -- This depends on the target architecture
 -- and should really be configurable
@@ -68,23 +63,23 @@ compile (gamma, _delta, m, _xi) r (SVar x) =
 -- Global labels
 -- -------------
 -- This is just an application with no arguments.
-compile env r (SGlobal i) = compile env r (SApp (SGlobal i) [])
+compile env r (SGlobal i    ) = compile env r (SApp (SGlobal i) [])
 
 -- Integers
 -- --------
-compile _ r (SInt i) = pure [Mov (R (Reg r)) (I i)]
+compile _   r (SInt    i    ) = pure [Mov (R (Reg r)) (I i)]
 
 -- Booleans
 -- --------
-compile _ r (SBool True) = pure [Mov (R (Reg r)) (I 1)]
-compile _ r (SBool False) = pure [Mov (R (Reg r)) (I 0)]
+compile _   r (SBool   True ) = pure [Mov (R (Reg r)) (I 1)]
+compile _   r (SBool   False) = pure [Mov (R (Reg r)) (I 0)]
 
 -- Binary primitives
 -- -----------------
 -- Compile e1 to the given register
 -- Get a fresh scratch register and compile e2 to it.
 -- Add the scratch register to the given register
-compile env@(gamma, (s : delta), m, xi) r (SPrim p e1 e2) = do
+compile env@(gamma, (S.Cons s delta), m, xi) r (SPrim p e1 e2) = do
   i1 <- compile env r e1
   i2 <- compile (gamma, delta, ((s, Stack xi) : m), xi + 1) s e2
   ip <- binaryPrim p r s
@@ -113,10 +108,10 @@ compile (gamma, delta, m, xi) r (SApp f args) = do
         SGlobal i -> [Call (L (show i)), Mov (R (Reg r)) (R (Reg r0))]
         _         -> error $ "Unexpected application head: " <> show f
   (prelude, postlude, _) <- foldM
-    -- If the arg is a variable which happens to be in the right register, just leave it as-is
-    -- Otherwise, push the register, put the argument in it, then pop it after the call
     (\(pre, post, m') (e, i) -> case e of
-      SVar x | Just r <- lookup x gamma, r == argReg i -> pure ([], [], m')
+      -- If the arg is a variable which happens to be in the right register, just leave it as-is
+      SVar x | Just xr <- lookup x gamma, xr == argReg i -> pure ([], [], m')
+      -- Otherwise, push the register, put the argument in it, then pop it after the call
       _ ->
         let ri = argReg i
             m'' :: Renaming
