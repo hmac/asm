@@ -9,9 +9,10 @@ data Exp
   | Bool Bool
   | Prim Prim Exp Exp
   | If Exp Exp Exp
+  | Not Exp
   deriving (Eq, Show)
 
-data Prim = Add | Sub | Mul | Eq | Gt | Lt
+data Prim = Add | Sub | Mul | Eq | Gt | Lt | And | Or
   deriving (Eq, Show)
 
 -- Supercombinator
@@ -26,6 +27,7 @@ data SExp
   | SGlobal Int
   | SInt Int
   | SBool Bool
+  | SNot SExp
   | SPrim Prim SExp SExp
   | SIf SExp SExp SExp
   deriving (Eq, Show)
@@ -45,6 +47,10 @@ data Asm
   | JmpGt Op
   | JmpLt Op
   | Label String
+  | IAnd Op Op
+  | IOr Op Op
+  | INot Op
+  | ShiftR Op Op
   deriving (Eq, Show)
 
 -- Operands are registers, labels, or literal integers

@@ -90,6 +90,13 @@ compile env@(gamma, (s : delta), m, xi) r (SPrim p e1 e2) = do
   ip <- binaryPrim p r s
   pure $ i1 <> [Push s] <> i2 <> ip <> [Pop s]
 
+-- Not
+-- ---
+-- This is special-cased because it's the only unary primitive.
+compile env r (SNot e) = do
+  i <- compile env r e
+  pure $ i <> [INot (R (Reg r)), ShiftR (R (Reg r)) (I 63)]
+
 -- Applications
 -- ------------
 -- Compile each argument to the corresponding arg register (pushing it first)
@@ -160,6 +167,9 @@ binaryPrim Mul r1 r2 = pure [IMul (R (Reg r1)) (R (Reg r2))]
 binaryPrim Eq  r1 r2 = binaryBooleanPrim JmpEq r1 r2
 binaryPrim Gt  r1 r2 = binaryBooleanPrim JmpGt r1 r2
 binaryPrim Lt  r1 r2 = binaryBooleanPrim JmpLt r1 r2
+-- TODO: we can probably optimise this using a sub-register
+binaryPrim And r1 r2 = pure [IAnd (R (Reg r1)) (R (Reg r2))]
+binaryPrim Or  r1 r2 = pure [IOr (R (Reg r1)) (R (Reg r2))]
 
 -- Primitives like =, >, < all have the same form, differing only in the kind
 -- of jump instruction they use

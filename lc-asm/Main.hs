@@ -128,7 +128,7 @@ lift = snd . lift' (0, mempty)
           -- insert the resulting supercombinator into the environment
           scs' = Map.insert ("_" <> show i) sc scs
           lam' = foldr (flip App . Var) (Global i) fvs
-      in                                                                                                         -- replace the lambda with a variable applied to the free vars and repeat
+      in                                                                                                                        -- replace the lambda with a variable applied to the free vars and repeat
           lift' (i + 1, scs') (hole lam')
     _ -> (i, Map.insert "_main" (mkSC [] expr) scs)
 
@@ -147,7 +147,9 @@ mkSC vars body = (vars, convert body)
     Bool   b     -> SBool b
     Prim p e1 e2 -> SPrim p (convert e1) (convert e2)
     If   b t  e  -> SIf (convert b) (convert t) (convert e)
-    e            -> error $ "Unexpected: " <> show e
+    Not e        -> SNot (convert e)
+    e@(Lam _ _) ->
+      error $ "Unexpected lambda in supercombinator body: " <> show e
 
 -- Convert
 --   $1 ... y = $2 ... y
@@ -219,6 +221,7 @@ findLambda = go id
     Bool   _ -> Nothing
     Var    _ -> Nothing
     Global _ -> Nothing
+    Not    e -> go (hole . Not) e
     Prim p e1 e2 ->
       go (hole . flip (Prim p) e2) e1 <|> go (hole . Prim p e1) e2
     App e1 e2 -> go (hole . flip App e2) e1 <|> go (hole . App e1) e2
@@ -240,6 +243,7 @@ fv = nub . go []
     Int    _     -> []
     Bool   _     -> []
     Global _     -> []
+    Not    e     -> go bound e
     App e1 e2    -> go bound e1 <> go bound e2
     Prim _ e1 e2 -> go bound e1 <> go bound e2
     If   b t  e  -> go bound b <> go bound t <> go bound e
@@ -254,26 +258,31 @@ sfv = nub . go
     SInt    _     -> []
     SBool   _     -> []
     SGlobal _     -> []
+    SNot    e     -> go e
     SApp _ args   -> concatMap go args
     SPrim _ e1 e2 -> go e1 <> go e2
     SIf   b t  e  -> go b <> go t <> go e
 
 printAsm :: Asm -> String
 printAsm = \case
-  Mov  o1 o2 -> "    mov " <> printOp o1 <> ", " <> printOp o2
-  IAdd o1 o2 -> "    add " <> printOp o1 <> ", " <> printOp o2
-  ISub o1 o2 -> "    sub " <> printOp o1 <> ", " <> printOp o2
-  IMul o1 o2 -> "    imul " <> printOp o1 <> ", " <> printOp o2
-  Push r     -> "    push " <> printReg r
-  Pop  r     -> "    pop " <> printReg r
-  Call o     -> "    call " <> printOp o
-  Ret        -> "    ret"
-  Label l    -> l <> ":"
-  Cmp o1 o2  -> "    cmp " <> printOp o1 <> ", " <> printOp o2
-  Jmp   o    -> "    jmp " <> printOp o
-  JmpEq o    -> "    je " <> printOp o
-  JmpGt o    -> "    jg " <> printOp o
-  JmpLt o    -> "    jl " <> printOp o
+  Mov  o1 o2   -> "    mov " <> printOp o1 <> ", " <> printOp o2
+  IAdd o1 o2   -> "    add " <> printOp o1 <> ", " <> printOp o2
+  ISub o1 o2   -> "    sub " <> printOp o1 <> ", " <> printOp o2
+  IMul o1 o2   -> "    imul " <> printOp o1 <> ", " <> printOp o2
+  Push r       -> "    push " <> printReg r
+  Pop  r       -> "    pop " <> printReg r
+  Call o       -> "    call " <> printOp o
+  Ret          -> "    ret"
+  Label l      -> l <> ":"
+  Cmp o1 o2    -> "    cmp " <> printOp o1 <> ", " <> printOp o2
+  Jmp   o      -> "    jmp " <> printOp o
+  JmpEq o      -> "    je " <> printOp o
+  JmpGt o      -> "    jg " <> printOp o
+  JmpLt o      -> "    jl " <> printOp o
+  IAnd o1 o2   -> "    and " <> printOp o1 <> ", " <> printOp o2
+  IOr  o1 o2   -> "    or " <> printOp o1 <> ", " <> printOp o2
+  INot o       -> "    not " <> printOp o
+  ShiftR o1 o2 -> "    shr " <> printOp o1 <> ", " <> printOp o2
 
 printOp :: Op -> String
 printOp = \case
@@ -301,7 +310,12 @@ parseExp = try parseApp <|> parseIf <|> parseNonApp
 
 parseNonApp :: Parser Exp
 parseNonApp =
-  parseLam <|> parseInt <|> parseBool <|> parseVar <|> parens parseExp
+  parseLam
+    <|> parseInt
+    <|> parseBool
+    <|> parseNot
+    <|> parseVar
+    <|> parens parseExp
 
 parseApp :: Parser Exp
 parseApp = do
@@ -335,7 +349,7 @@ parseVarString = try $ do
   pure (a : as)
 
 keywords :: [String]
-keywords = ["if", "then", "else", "True", "False"]
+keywords = ["if", "then", "else", "True", "False", "not", "and", "or"]
 
 parsePrim :: Parser Prim
 parsePrim =
@@ -345,6 +359,8 @@ parsePrim =
     <|> ((string "=" <* space) $> Eq)
     <|> ((string ">" <* space) $> Gt)
     <|> ((string "<" <* space) $> Lt)
+    <|> ((string "and" <* space) $> And)
+    <|> ((string "or" <* space) $> Or)
 
 parseInt :: Parser Exp
 parseInt = Int . read <$> some digitChar <* space
@@ -354,6 +370,13 @@ parseBool = parseTrue <|> parseFalse
  where
   parseTrue  = string "True" >> void space $> Bool True
   parseFalse = string "False" >> void space $> Bool True
+
+parseNot :: Parser Exp
+parseNot = do
+  _ <- string "not"
+  void space
+  e <- parseNonApp
+  pure $ Not e
 
 parseIf :: Parser Exp
 parseIf = do
