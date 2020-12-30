@@ -105,7 +105,7 @@ compile (gamma, delta, m, xi) r (SApp f args) = do
         SVar x -> case lookup x gamma of
           Nothing -> error $ "Unknown variable " <> show x
           Just xr -> [Call (R (Reg xr)), Mov (R (Reg r)) (R (Reg r0))]
-        SGlobal i -> [Call (L (show i)), Mov (R (Reg r)) (R (Reg r0))]
+        SGlobal l -> [Call (L l), Mov (R (Reg r)) (R (Reg r0))]
         _         -> error $ "Unexpected application head: " <> show f
   (prelude, postlude, _) <- foldM
     (\(pre, post, m') (e, i) -> case e of
@@ -113,9 +113,8 @@ compile (gamma, delta, m, xi) r (SApp f args) = do
       SVar x | Just xr <- lookup x gamma, xr == argReg i -> pure ([], [], m')
       -- Otherwise, push the register, put the argument in it, then pop it after the call
       _ ->
-        let ri = argReg i
-            m'' :: Renaming
-            m'' = ((ri, Stack (xi + i - 1)) : m')
+        let ri  = argReg i
+            m'' = ((ri, Stack (xi + i - 1)) : m') :: Renaming
         in  do
               is <- compile (gamma, delta, m'', xi + i) ri e
               pure (pre <> is, Pop ri : post, m'')

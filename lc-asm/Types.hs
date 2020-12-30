@@ -24,7 +24,7 @@ type SC = ([String], SExp)
 data SExp
   = SApp SExp [SExp] -- Note: the application head is either a SVar or SGlobal
   | SVar String
-  | SGlobal Int
+  | SGlobal String
   | SInt Int
   | SBool Bool
   | SNot SExp

@@ -46,14 +46,14 @@ import           Compile                        ( compileSC )
 main :: IO ()
 main = do
   args <- getArgs
-  let multi        = parseInput <&> multiLambda
+  let multi        = getContents >>= parseInput <&> multiLambda
       lift_        = multi <&> lift
       eta'd        = lift_ <&> Map.map eta
       necessary    = eta'd <&> removeRedundant
       asm          = necessary <&> compileSupercombinators
       optimisedAsm = asm <&> Map.map removeRedundantInstructions
   case args of
-    ["parse"    ] -> parseInput >>= pPrint
+    ["parse"    ] -> getContents >>= parseInput >>= pPrint
     ["multi"    ] -> multi >>= pPrint
     ["lift"     ] -> lift_ >>= pPrint
     ["asm"      ] -> asm <&> printProgram >>= putStrLn
@@ -78,12 +78,10 @@ launchWebServer portStr = Warp.run (read portStr) app
             asm    = printProgram $ compileSupercombinators supers
         Wai.responseLBS status200 mempty (pack asm)
 
-parseInput :: IO Exp
-parseInput = do
-  input <- getContents
-  case parse (parseExp <* eof) "<stdin>" input of
-    Left  err  -> putStrLn (errorBundlePretty err) >> exitWith (ExitFailure 1)
-    Right expr -> pure expr
+parseInput :: String -> IO Exp
+parseInput input = case parse (parseExp <* eof) "<stdin>" input of
+  Left  err  -> putStrLn (errorBundlePretty err) >> exitWith (ExitFailure 1)
+  Right expr -> pure expr
 
 -- Convert lambda calculus with just integers into assembly.
 --
@@ -128,7 +126,7 @@ lift = snd . lift' (0, mempty)
           -- insert the resulting supercombinator into the environment
           scs' = Map.insert ("_" <> show i) sc scs
           lam' = foldr (flip App . Var) (Global i) fvs
-      in                                                                                                                        -- replace the lambda with a variable applied to the free vars and repeat
+      in                                                                                                                           -- replace the lambda with a variable applied to the free vars and repeat
           lift' (i + 1, scs') (hole lam')
     _ -> (i, Map.insert "_main" (mkSC [] expr) scs)
 
@@ -142,7 +140,7 @@ mkSC vars body = (vars, convert body)
       SApp f args -> SApp f (args <> [convert e2])
       se1         -> SApp se1 [convert e2]
     Var    x     -> SVar x
-    Global i     -> SGlobal i
+    Global i     -> SGlobal ("_" <> show i)
     Int    i     -> SInt i
     Bool   b     -> SBool b
     Prim p e1 e2 -> SPrim p (convert e1) (convert e2)
@@ -197,9 +195,9 @@ test =
         (Lam ["x"] (App (Lam ["y"] (Prim Add (Var "x") (Var "y"))) (Var "x")))
         (Int 4)
       expected = Map.fromList
-        [ ("_main", ([], SApp (SGlobal 1) [SInt 4]))
+        [ ("_main", ([], SApp (SGlobal "_1") [SInt 4]))
         , ("_0"   , (["x", "y"], SPrim Add (SVar "x") (SVar "y")))
-        , ("_1"   , (["x"], SApp (SGlobal 0) [SVar "x", SVar "x"]))
+        , ("_1"   , (["x"], SApp (SGlobal "_0") [SVar "x", SVar "x"]))
         ]
       actual = removeRedundant $ Map.map eta $ lift $ multiLambda e
   in  if expected == actual
