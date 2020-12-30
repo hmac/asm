@@ -127,36 +127,35 @@ lift = snd . lift' (0, mempty)
           -- insert the resulting supercombinator into the environment
           scs' = Map.insert ("_" <> show i) sc scs
           lam' = foldr (flip App . Var) (Global i) fvs
-      in                                                                                                                                                                            -- replace the lambda with a variable applied to the free vars and repeat
+      in                                                                                                                                                                                                            -- replace the lambda with a variable applied to the free vars and repeat
           lift' (i + 1, scs') (hole lam')
-    -- We've found a fixpoint
-    Just (Right (x, body, hole)) ->
-      let
-          -- name this supercombinator
-          scName = "_" <> show i
-          -- rename any references to x in the body to refer to the supercombinator
-          body'  = rename x i body
-          -- get the free variables of the body
-          fvs    = fv body' \\ [scName]
-          -- abstract each as a parameter
-          sc     = mkSC fvs body'
+    -- We've found a let f = \xs. e in body
+    Just (Right (f, xs, e, body, hole)) ->
+      -- get the free variables of the let
+      let fvs   = fv $ Let f (Lam xs e) body
+          -- this is an application of the sc to its free vars
+          self  = foldr (flip App . Var) (Global i) fvs
+          -- rename any occurrences of 'f' in 'e' to 'self'
+          e'    = rename f self e
+          -- rename any occurrences of 'f' in 'body' to 'self'
+          body' = rename f self body
+          -- abstract each free variable as a parameter
+          sc    = mkSC (fvs <> xs) e'
           -- insert the resulting supercombinator into the environment
-          scs'   = Map.insert scName sc scs
-          lam'   = foldr (flip App . Var) (Global i) fvs
-      in                                                                                                                                                                            -- replace the lambda with a variable applied to the free vars and repeat
-          lift' (i + 1, scs') (hole lam')
+          scs'  = Map.insert ("_" <> show i) sc scs
+      in                                                                                                                                                                                                            -- replace the lambda with a variable applied to the free vars and repeat
+          lift' (i + 1, scs') (hole body')
+
     Nothing -> (i, Map.insert "_main" (mkSC [] expr) scs)
 
-rename :: String -> Int -> Exp -> Exp
+rename :: String -> Exp -> Exp -> Exp
 rename x y = go
  where
   go = \case
-    Var z | z == x    -> Global y
+    Var z | z == x    -> y
           | otherwise -> Var z
     Lam zs e | x `elem` zs -> Lam zs e
              | otherwise   -> Lam zs (go e)
-    Fix z e | z == x    -> Fix z e
-            | otherwise -> Fix x (go e)
     App e1 e2    -> App (go e1) (go e2)
     If   b t  e  -> If (go b) (go t) (go e)
     Prim p e1 e2 -> Prim p (go e1) (go e2)
@@ -164,6 +163,8 @@ rename x y = go
     Global l     -> Global l
     Int    n     -> Int n
     Bool   b     -> Bool b
+    Let z e1 e2 | z == x    -> Let z e1 e2
+                | otherwise -> Let z (go e1) (go e2)
 
 -- Make a supercombinator from a list of bound variable and an expression body
 -- The body must not contain any lambdas or lets
@@ -181,8 +182,8 @@ mkSC vars body = (vars, convert body)
     Prim p e1 e2 -> SPrim p (convert e1) (convert e2)
     If   b t  e  -> SIf (convert b) (convert t) (convert e)
     Not e        -> SNot (convert e)
-    e@(Fix _ _) ->
-      error $ "Unexpected fixpoint in supercombinator body: " <> show e
+    e@(Let _ _ _) ->
+      error $ "Unexpected let in supercombinator body: " <> show e
     e@(Lam _ _) ->
       error $ "Unexpected lambda in supercombinator body: " <> show e
 
@@ -246,17 +247,25 @@ test =
           putStrLn "Actual:"
           pPrint actual
 
--- Find the first lambda or fixpoint which has no lambdas (or fixpoints) in its body
--- Left is Lambda, right is fixpoint
+-- Find the first lambda or let which has no lambdas or lets in its body
+-- Left is Lambda, Right is let
 findLambda
-  :: Exp -> Maybe (Either ([String], Exp, Exp -> Exp) (String, Exp, Exp -> Exp))
+  :: Exp
+  -> Maybe
+       ( Either
+           ([String], Exp, Exp -> Exp)
+           (String, [String], Exp, Exp, Exp -> Exp)
+       )
 findLambda = go id
  where
   go
     :: (Exp -> Exp)
     -> Exp
     -> Maybe
-         (Either ([String], Exp, Exp -> Exp) (String, Exp, Exp -> Exp))
+         ( Either
+             ([String], Exp, Exp -> Exp)
+             (String, [String], Exp, Exp, Exp -> Exp)
+         )
   go hole = \case
     Int    _ -> Nothing
     Bool   _ -> Nothing
@@ -270,8 +279,11 @@ findLambda = go id
       go (hole . (\b' -> If b' t e)) b
         <|> go (hole . (\t' -> If b t' e)) t
         <|> go (hole . If b t)             e
-    Lam x e -> go (hole . Lam x) e <|> Just (Left (x, e, hole))
-    Fix x e -> go (hole . Fix x) e <|> Just (Right (x, e, hole))
+    Lam x e     -> go (hole . Lam x) e <|> Just (Left (x, e, hole))
+    Let x e1 e2 -> go (hole . Let x e1) e2 <|> case e1 of
+      Lam ys e3 -> go (hole . (\e3' -> Let x (Lam ys e3') e2)) e3
+        <|> Just (Right (x, ys, e3, e2, hole))
+      _ -> go (hole . flip (Let x) e2) e1
 
 -- Calculate the free variable of an expression
 fv :: Exp -> [String]
@@ -282,7 +294,6 @@ fv = nub . go []
     Var v | v `elem` bound -> []
           | otherwise      -> [v]
     Lam xs e     -> go (xs <> bound) e
-    Fix x  e     -> go (x : bound) e
     Int    _     -> []
     Bool   _     -> []
     Global _     -> []
@@ -290,21 +301,22 @@ fv = nub . go []
     App e1 e2    -> go bound e1 <> go bound e2
     Prim _ e1 e2 -> go bound e1 <> go bound e2
     If   b t  e  -> go bound b <> go bound t <> go bound e
+    Let  x e1 e2 -> go (x : bound) e1 <> go (x : bound) e2
 
 -- Calculate the free variables of a SExp
 sfv :: SExp -> [String]
-sfv = nub . go
+sfv = nub . go []
  where
-  go :: SExp -> [String]
-  go = \case
+  go :: [String] -> SExp -> [String]
+  go bound = \case
     SVar    v     -> [v]
     SInt    _     -> []
     SBool   _     -> []
     SGlobal _     -> []
-    SNot    e     -> go e
-    SApp _ args   -> concatMap go args
-    SPrim _ e1 e2 -> go e1 <> go e2
-    SIf   b t  e  -> go b <> go t <> go e
+    SNot    e     -> go bound e
+    SApp _ args   -> concatMap (go bound) args
+    SPrim _ e1 e2 -> go bound e1 <> go bound e2
+    SIf   b t  e  -> go bound b <> go bound t <> go bound e
 
 printAsm :: Asm -> String
 printAsm = \case
@@ -459,7 +471,7 @@ parseLet = do
   _  <- string "in"
   void space
   e2 <- parseExp
-  pure $ App (Lam [x] e2) (Fix x e1)
+  pure $ Let x e1 e2
 
 parens :: Parser a -> Parser a
 parens = between (string "(" >> space) (string ")" >> space)

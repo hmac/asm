@@ -31,9 +31,13 @@ compileSC (vars, e) =
   let gamma = zipWith (\v i -> (v, argReg i)) vars [1 ..]
       delta = S.cycle
         [Register "r10", Register "r11", Register "r12", Register "r13"]
+      rcx = Register "rcx"
   in  do
-        is <- compile (gamma, delta, mempty, 0) r0 e
-        pure $ is <> [Ret]
+        is <- compile (gamma, delta, mempty, 0) rcx e
+        pure
+          $  [Push rcx]
+          <> is
+          <> [Mov (R (Reg r0)) (R (Reg rcx)), Pop rcx, Ret]
 
 -- This depends on the target architecture
 -- and should really be configurable
@@ -50,14 +54,17 @@ compile :: Env -> Register -> SExp -> Gen [Asm]
 -- ---------
 -- Look up the variable in the context
 -- If it's been pushed onto the stack, look up the correct stack address
-compile (gamma, _delta, m, _xi) r (SVar x) =
+compile env@(_, _, _, xi) r (SVar x) =
   pure
     $ let register :: PseudoReg
-          register = case lookup x gamma of
-            Nothing  -> error $ "Unknown variable " <> show x
-            Just reg -> case lookup reg m of
-              Nothing -> Reg reg
-              Just r' -> r'
+          register = case lookupVar x env of
+            Just (Stack i) ->
+              -- if the register is in stack position i, we want the offset
+              -- from the stack pointer, which will be at stack position
+              -- <length of stack>.
+              Stack (xi - i - 1)
+            Just r' -> r'
+            Nothing -> error $ "Unknown variable " <> show x
       in  if register == Reg r then [] else [Mov (R (Reg r)) (R register)]
 
 -- Global labels
@@ -103,7 +110,9 @@ compile (gamma, delta, m, xi) r (SApp f args) = do
   (prelude, postlude, m') <- foldM
     (\(pre, post, m') (e, i) -> case e of
       -- If the arg is a variable which happens to be in the right register, just leave it as-is
-      SVar x | Just xr <- lookup x gamma, xr == argReg i -> pure ([], [], m')
+      SVar x
+        | Just (Reg xr) <- lookupVar x (gamma, delta, m', xi), xr == argReg i
+        -> pure ([], [], m')
       -- Otherwise, push the register, put the argument in it, then pop it after the call
       _ ->
         let ri  = argReg i
@@ -115,11 +124,9 @@ compile (gamma, delta, m, xi) r (SApp f args) = do
     ([], [], m)
     (zip args [1 ..])
   let call = case f of
-        SVar x -> case lookup x gamma of
+        SVar x -> case lookupVar x (gamma, delta, m', xi) of
+          Just xr -> [Call (R xr), Mov (R (Reg r)) (R (Reg r0))]
           Nothing -> error $ "Unknown variable " <> show x
-          Just xr -> case lookup xr m' of
-            Just xr' -> [Call (R xr'), Mov (R (Reg r)) (R (Reg r0))]
-            Nothing  -> [Call (R (Reg xr)), Mov (R (Reg r)) (R (Reg r0))]
         SGlobal l -> [Call (L l), Mov (R (Reg r)) (R (Reg r0))]
         _         -> error $ "Unexpected application head: " <> show f
   pure $ prelude <> call <> postlude
@@ -148,6 +155,13 @@ compile env r (SIf b t e) = do
     <> [Jmp (L endLabel), Label elseLabel]
     <> else_
     <> [Label endLabel]
+
+lookupVar :: String -> Env -> Maybe PseudoReg
+lookupVar x (gamma, _, m, _) = case lookup x gamma of
+  Nothing -> Nothing
+  Just r  -> case lookup r m of
+    Just r' -> Just r'
+    Nothing -> Just (Reg r)
 
 newLabel :: State Int String
 newLabel = do
