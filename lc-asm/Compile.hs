@@ -1,7 +1,14 @@
+{-# LANGUAGE LambdaCase #-}
 module Compile where
 
 import           Types
-import           Control.Monad                  ( foldM )
+import           Data.Functor                   ( (<&>) )
+import           Control.Monad.Trans.Class      ( lift )
+import           Control.Monad.Trans.Reader     ( ReaderT
+                                                , asks
+                                                , local
+                                                , runReaderT
+                                                )
 import           Control.Monad.Trans.State.Strict
                                                 ( State
                                                 , get
@@ -11,7 +18,12 @@ import qualified Data.Stream                   as S
 
 -- Compiling supercombinators to assembly
 
-type Env = (Ctx, ScratchRegs, Renaming, StackCounter)
+data Env = Env
+  { context :: Ctx
+  , scratchRegisters :: ScratchRegs
+  , renaming :: Renaming
+  , stackCounter :: StackCounter
+  }
 
 type Ctx = [(String, Register)]
 
@@ -21,23 +33,26 @@ type Renaming = [(Register, PseudoReg)]
 
 type StackCounter = Int
 
-type Gen a = State Int a
+type Gen a = ReaderT Env (State Int) a
+
+runGen :: Env -> Gen a -> State Int a
+runGen env g = runReaderT g env
 
 -- To compile a supercombinator we map each argument to a register and then set up a circular
 -- sequence of scratch registers to use.
 -- For now we assume there are 4 scratch registers available.
-compileSC :: SC -> Gen [Asm]
+compileSC :: SC -> State Int [Asm]
 compileSC (vars, e) =
   let gamma = zipWith (\v i -> (v, argReg i)) vars [1 ..]
       delta = S.cycle
         [Register "r10", Register "r11", Register "r12", Register "r13"]
-      rcx = Register "rcx"
+      rbx = Register "rbx"
   in  do
-        is <- compile (gamma, delta, mempty, 0) rcx e
+        is <- runGen (Env gamma delta mempty 0) (compile rbx e)
         pure
-          $  [Push rcx]
+          $  [Push rbx]
           <> is
-          <> [Mov (R (Reg r0)) (R (Reg rcx)), Pop rcx, Ret]
+          <> [Mov (R (Reg r0)) (R (Reg rbx)), Pop rbx, Ret]
 
 -- This depends on the target architecture
 -- and should really be configurable
@@ -47,89 +62,75 @@ r0 = Register "rax"
 -- The x86-64 registers used for arguments.
 -- TODO: handle functions of more than 6 arguments
 argReg :: Int -> Register
-argReg i = Register $ ["rdi", "rsi", "rdx", "rcx", "r8", "r9"] !! (i - 1)
+argReg i = Register $ ["rdi", "rsi", "rdx", "rcx", "r8", "r9"] !! i
 
-compile :: Env -> Register -> SExp -> Gen [Asm]
+compile :: Register -> SExp -> Gen [Asm]
 -- Variables
 -- ---------
 -- Look up the variable in the context
 -- If it's been pushed onto the stack, look up the correct stack address
-compile env@(_, _, _, xi) r (SVar x) =
-  pure
-    $ let register :: PseudoReg
-          register = case lookupVar x env of
-            Just (Stack i) ->
-              -- if the register is in stack position i, we want the offset
-              -- from the stack pointer, which will be at stack position
-              -- <length of stack>.
-              Stack (xi - i - 1)
-            Just r' -> r'
-            Nothing -> error $ "Unknown variable " <> show x
-      in  if register == Reg r then [] else [Mov (R (Reg r)) (R register)]
+compile r (SVar x) = do
+  xi       <- asks stackCounter
+  register <- lookupVar x <&> \case
+    Just (Stack i) ->
+      -- if the register is in stack position i, we want the offset
+      -- from the stack pointer, which will be at stack position
+      -- <length of stack - 1>.
+      Stack (xi - i - 1)
+    Just r' -> r'
+    Nothing -> error $ "Unknown variable " <> show x
+  pure $ if register == Reg r then [] else [Mov (R (Reg r)) (R register)]
 
 -- Global labels
 -- -------------
-compile _ r (SGlobal i    ) = pure [Mov (R (Reg r)) (L i)]
+compile r (SGlobal i    ) = pure [Mov (R (Reg r)) (L i)]
 
 -- Integers
 -- --------
-compile _ r (SInt    i    ) = pure [Mov (R (Reg r)) (I i)]
+compile r (SInt    i    ) = pure [Mov (R (Reg r)) (I i)]
 
 -- Booleans
 -- --------
-compile _ r (SBool   True ) = pure [Mov (R (Reg r)) (I 1)]
-compile _ r (SBool   False) = pure [Mov (R (Reg r)) (I 0)]
+compile r (SBool   True ) = pure [Mov (R (Reg r)) (I 1)]
+compile r (SBool   False) = pure [Mov (R (Reg r)) (I 0)]
 
 -- Binary primitives
 -- -----------------
 -- Compile e1 to the given register
 -- Get a fresh scratch register and compile e2 to it.
 -- Add the scratch register to the given register
-compile env@(gamma, (S.Cons s delta), m, xi) r (SPrim p e1 e2) = do
-  i1 <- compile env r e1
-  i2 <- compile (gamma, delta, ((s, Stack xi) : m), xi + 1) s e2
-  ip <- binaryPrim p r s
-  pure $ i1 <> [Push s] <> i2 <> ip <> [Pop s]
+compile r (SPrim p e1 e2) = do
+  i1   <- compile r e1
+  rest <- withScratchRegister $ \s -> do
+    i2 <- compile s e2
+    ip <- binaryPrim p r s
+    pure $ i2 <> ip
+  pure $ i1 <> rest
 
 -- Not
 -- ---
 -- This is special-cased because it's the only unary primitive.
-compile env r (SNot e) = do
-  i <- compile env r e
+compile r (SNot e) = do
+  i <- compile r e
   pure $ i <> [INot (R (Reg r)), ShiftR (R (Reg r)) (I 63)]
 
 -- Applications
 -- ------------
 -- Compile each argument to the corresponding arg register (pushing it first)
--- If the argument is already in the right register, don't push it
+-- TODO: if the argument is already in the right register, don't push it
 -- Call the function
 -- Move the the result to the given register
 -- Pop the arg registers
--- TODO: clean this up
-compile (gamma, delta, m, xi) r (SApp f args) = do
-  (prelude, postlude, m') <- foldM
-    (\(pre, post, m') (e, i) -> case e of
-      -- If the arg is a variable which happens to be in the right register, just leave it as-is
-      SVar x
-        | Just (Reg xr) <- lookupVar x (gamma, delta, m', xi), xr == argReg i
-        -> pure ([], [], m')
-      -- Otherwise, push the register, put the argument in it, then pop it after the call
-      _ ->
-        let ri  = argReg i
-            m'' = ((ri, Stack (xi + i - 1)) : m') :: Renaming
-        in  do
-              is <- compile (gamma, delta, m'', xi + i) ri e
-              pure (pre <> (Push ri : is), Pop ri : post, m'')
-    )
-    ([], [], m)
-    (zip args [1 ..])
+compile r (SApp f args) = do
   let call = case f of
-        SVar x -> case lookupVar x (gamma, delta, m', xi) of
+        SVar x -> lookupVar x <&> \case
           Just xr -> [Call (R xr), Mov (R (Reg r)) (R (Reg r0))]
           Nothing -> error $ "Unknown variable " <> show x
-        SGlobal l -> [Call (L l), Mov (R (Reg r)) (R (Reg r0))]
+        SGlobal l -> pure [Call (L l), Mov (R (Reg r)) (R (Reg r0))]
         _         -> error $ "Unexpected application head: " <> show f
-  pure $ prelude <> call <> postlude
+  compileArguments
+    (map (\(i, a) -> (i, compile (argReg i) a)) (zip [1 ..] args))
+    call
 
 -- If expressions
 -- --------------
@@ -142,12 +143,12 @@ compile (gamma, delta, m, xi) r (SApp f args) = do
 --       end:
 --
 -- We can re-use the same register for all three sections
-compile env r (SIf b t e) = do
+compile r (SIf b t e) = do
   elseLabel <- newLabel
   endLabel  <- newLabel
-  condition <- compile env r b
-  then_     <- compile env r t
-  else_     <- compile env r e
+  condition <- compile r b
+  then_     <- compile r t
+  else_     <- compile r e
   pure
     $  condition
     <> [Cmp (R (Reg r)) (I 0), JmpEq (L elseLabel)]
@@ -156,17 +157,46 @@ compile env r (SIf b t e) = do
     <> else_
     <> [Label endLabel]
 
-lookupVar :: String -> Env -> Maybe PseudoReg
-lookupVar x (gamma, _, m, _) = case lookup x gamma of
-  Nothing -> Nothing
-  Just r  -> case lookup r m of
-    Just r' -> Just r'
-    Nothing -> Just (Reg r)
+compileArguments :: [(Int, Gen [Asm])] -> Gen [Asm] -> Gen [Asm]
+compileArguments []              call = call
+compileArguments ((i, a) : args) call = withRegister (argReg i) $ do
+  a_is <- a
+  rest <- compileArguments args call
+  pure $ a_is <> rest
 
-newLabel :: State Int String
+-- Save the original contents of the register for the duration of the computation:
+-- push r
+-- <computation>
+-- pop r
+withRegister :: Register -> Gen [Asm] -> Gen [Asm]
+withRegister r g = do
+  m  <- asks renaming
+  xi <- asks stackCounter
+  let m'  = (r, Stack xi) : m
+      xi' = succ xi
+  is <- local (\env -> env { renaming = m', stackCounter = xi' }) g
+  pure $ [Push r] <> is <> [Pop r]
+
+withScratchRegister :: (Register -> Gen [Asm]) -> Gen [Asm]
+withScratchRegister g = do
+  S.Cons s delta <- asks scratchRegisters
+  local (\env -> env { scratchRegisters = delta }) $ withRegister s (g s)
+
+
+lookupVar :: String -> Gen (Maybe PseudoReg)
+lookupVar x = do
+  gamma <- asks context
+  m     <- asks renaming
+  pure $ case lookup x gamma of
+    Nothing -> Nothing
+    Just r  -> case lookup r m of
+      Just r' -> Just r'
+      Nothing -> Just (Reg r)
+
+newLabel :: Gen String
 newLabel = do
-  i <- get
-  put (i + 1)
+  i <- lift get
+  lift $ put (i + 1)
   pure $ "__" <> show i
 
 binaryPrim :: Prim -> Register -> Register -> Gen [Asm]
