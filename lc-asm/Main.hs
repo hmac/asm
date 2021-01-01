@@ -1,9 +1,9 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE DeriveGeneric #-}
 
 module Main where
 
-import           Data.Functor                   ( (<&>) )
 import           Data.List                      ( nub
                                                 , (\\)
                                                 )
@@ -30,53 +30,65 @@ import           Text.Megaparsec         hiding ( State
 import           Text.Megaparsec.Char
 import           Text.Pretty.Simple             ( pPrint )
 
--- | Web server
-import qualified Network.Wai                   as Wai
-import qualified Network.Wai.Handler.Warp      as Warp
-import           Network.HTTP.Types.Status      ( status400
-                                                , status200
-                                                )
-import           Data.ByteString.Lazy.Char8     ( unpack
-                                                , pack
-                                                )
 
 import           Types
 import           Compile                        ( compileSC )
+import qualified Server                         ( run )
+import           GHC.Generics
+import           Data.Aeson                     ( ToJSON )
+
+data Result = Result { _parse :: Exp
+                     , _merge_lambdas :: Exp
+                     , _lift :: Map String SC
+                     , _eta_reduce :: Map String SC
+                     , _remove_redundant_supercombinators :: Map String SC
+                     , _compile :: Map String [Asm]
+                     , _compile_str :: String
+                     , _optimise :: Map String [Asm]
+                     , _optimise_Str :: String
+                     }
+                     deriving (Generic)
+instance ToJSON Result
 
 main :: IO ()
 main = do
   args <- getArgs
-  let multi        = getContents >>= parseInput <&> multiLambda
-      lift_        = multi <&> lift
-      eta'd        = lift_ <&> Map.map eta
-      necessary    = eta'd <&> removeRedundant
-      asm          = necessary <&> compileSupercombinators
-      optimisedAsm = asm <&> Map.map removeRedundantInstructions
+  let printOrError :: (a -> IO ()) -> Either String a -> IO ()
+      printOrError _ (Left  err) = putStrLn $ "Error: " <> err
+      printOrError p (Right r  ) = p r
+      runStage :: (a -> IO ()) -> (Result -> a) -> IO ()
+      runStage printer stage =
+        getContents >>= (printOrError printer . fmap stage . generateResult)
   case args of
-    ["parse"    ] -> getContents >>= parseInput >>= pPrint
-    ["multi"    ] -> multi >>= pPrint
-    ["lift"     ] -> lift_ >>= pPrint
-    ["asm"      ] -> asm <&> printProgram >>= putStrLn
-    ["optimised"] -> optimisedAsm <&> printProgram >>= putStrLn
-    []            -> optimisedAsm <&> printProgram >>= putStrLn
+    ["parse"    ] -> runStage pPrint _parse
+    ["multi"    ] -> runStage pPrint _merge_lambdas
+    ["lift"     ] -> runStage pPrint _lift
+    ["asm"      ] -> runStage (print . printProgram) _compile
+    ["optimised"] -> runStage (print . printProgram) _optimise
+    []            -> runStage (print . printProgram) _optimise
     ["web", port] -> do
-      putStrLn $ "Launching HTTP server on port " <> port
-      launchWebServer port
+      Server.run port generateResult
     a -> error $ "Bad argument: " <> show a
 
-launchWebServer :: String -> IO ()
-launchWebServer portStr = Warp.run (read portStr) app
- where
-  app req respond = do
-    body <- unpack <$> Wai.strictRequestBody req
-    respond $ case parse (parseExp <* eof) "<request>" body of
-      Left err -> do
-        let errStr = pack $ errorBundlePretty err
-        Wai.responseLBS status400 mempty errStr
-      Right expr -> do
-        let supers = removeRedundant $ Map.map eta $ lift $ multiLambda expr
-            asm    = printProgram $ compileSupercombinators supers
-        Wai.responseLBS status200 mempty (pack asm)
+generateResult :: String -> Either String Result
+generateResult input = case parse (parseExp <* eof) "<input>" input of
+  Left err -> Left (errorBundlePretty err)
+  Right expr ->
+    let multi        = multiLambda expr
+        lifted       = lift multi
+        eta'd        = Map.map eta lifted
+        necessary    = removeRedundant eta'd
+        asm          = compileSupercombinators necessary
+        optimisedAsm = Map.map removeRedundantInstructions asm
+    in  Right $ Result expr
+                       multi
+                       lifted
+                       eta'd
+                       necessary
+                       asm
+                       (printProgram asm)
+                       optimisedAsm
+                       (printProgram optimisedAsm)
 
 parseInput :: String -> IO Exp
 parseInput input = case parse (parseExp <* eof) "<stdin>" input of
@@ -127,7 +139,7 @@ lift = snd . lift' (0, mempty)
           -- insert the resulting supercombinator into the environment
           scs' = Map.insert ("_" <> show i) sc scs
           lam' = foldr (flip App . Var) (Global i) fvs
-      in                                                                                                                                                                                                            -- replace the lambda with a variable applied to the free vars and repeat
+      in                                                                                                                                                                                                                                                   -- replace the lambda with a variable applied to the free vars and repeat
           lift' (i + 1, scs') (hole lam')
     -- We've found a let f = \xs. e in body
     Just (Right (f, xs, e, body, hole)) ->
@@ -143,7 +155,7 @@ lift = snd . lift' (0, mempty)
           sc    = mkSC (fvs <> xs) e'
           -- insert the resulting supercombinator into the environment
           scs'  = Map.insert ("_" <> show i) sc scs
-      in                                                                                                                                                                                                            -- replace the lambda with a variable applied to the free vars and repeat
+      in                                                                                                                                                                                                                                                   -- replace the lambda with a variable applied to the free vars and repeat
           lift' (i + 1, scs') (hole body')
 
     Nothing -> (i, Map.insert "_main" (mkSC [] expr) scs)
@@ -483,5 +495,6 @@ parens = between (string "(" >> space) (string ")" >> space)
 -- > \xs -> unsnoc xs == if null xs then Nothing else Just (init xs, last xs)
 unsnoc :: [a] -> Maybe ([a], a)
 unsnoc []       = Nothing
-unsnoc [x     ] = Just ([], x)
-unsnoc (x : xs) = Just (x : a, b) where Just (a, b) = unsnoc xs
+unsnoc (x : xs) = case unsnoc xs of
+  Just (a, b) -> Just (x : a, b)
+  Nothing     -> Just ([], x)

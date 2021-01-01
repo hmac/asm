@@ -1,0 +1,30 @@
+cabal-version: >=1.10
+name:          lc-asm
+version:       0.1.0.0
+maintainer:    harry@hmac.dev
+author:        Harry Maclean
+build-type:    Simple
+
+executable lc-asm
+    main-is:          Main.hs
+    other-modules:    Compile
+                      Server
+                      Types
+    default-language: Haskell2010
+    build-depends:    base >=4.13 && <4.14
+                    , containers
+                    , transformers
+                    , megaparsec
+                    , bytestring
+                    , wai
+                    , warp
+                    , http-types
+                    , pretty-simple
+                    , Stream
+                    , aeson
+    ghc-options:    -Wall
+                    -Werror
+                    -Wcompat
+                    -Wincomplete-record-updates
+                    -Wincomplete-uni-patterns
+                    -Wredundant-constraints

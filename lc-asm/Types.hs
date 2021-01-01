@@ -1,4 +1,8 @@
+{-# LANGUAGE DeriveGeneric #-}
 module Types where
+
+import           GHC.Generics
+import           Data.Aeson                     ( ToJSON )
 
 data Exp
   = Lam [String] Exp
@@ -11,10 +15,14 @@ data Exp
   | If Exp Exp Exp
   | Not Exp
   | Let String Exp Exp
-  deriving (Eq, Show)
+  deriving (Generic, Eq, Show)
+
+instance ToJSON Exp
 
 data Prim = Add | Sub | Mul | Eq | Gt | Lt | And | Or
-  deriving (Eq, Show)
+  deriving (Eq, Show, Generic)
+
+instance ToJSON Prim
 
 -- Supercombinator
 type SC = ([String], SExp)
@@ -31,7 +39,9 @@ data SExp
   | SNot SExp
   | SPrim Prim SExp SExp
   | SIf SExp SExp SExp
-  deriving (Eq, Show)
+  deriving (Eq, Show, Generic)
+
+instance ToJSON SExp
 
 data Asm
   = Mov Op Op
@@ -52,14 +62,22 @@ data Asm
   | IOr Op Op
   | INot Op
   | ShiftR Op Op
-  deriving (Eq, Show)
+  deriving (Eq, Show, Generic)
+
+instance ToJSON Asm
 
 -- Operands are registers, labels, or literal integers
 data Op = R PseudoReg | L String | I Int
-  deriving (Eq, Show)
+  deriving (Eq, Show, Generic)
+
+instance ToJSON Op
 
 data Register = Register String
-  deriving (Eq, Show)
+  deriving (Eq, Show, Generic)
+
+instance ToJSON Register
 
 data PseudoReg = Reg Register | Stack Int
-  deriving (Eq, Show)
+  deriving (Eq, Show, Generic)
+
+instance ToJSON PseudoReg
