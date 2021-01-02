@@ -17,6 +17,7 @@ mkDerivation {
     wai
     warp
     aeson
+    prettyprinter
   ];
   buildTools = [ cabal-install hlint brittany ghcid cabal-edit ];
   license = "unknown";

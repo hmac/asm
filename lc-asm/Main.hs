@@ -33,15 +33,23 @@ import           Text.Pretty.Simple             ( pPrint )
 
 import           Types
 import           Compile                        ( compileSC )
+import           Print                          ( printExp
+                                                , printSExp
+                                                , printDefinitions
+                                                )
 import qualified Server                         ( run )
 import           GHC.Generics
 import           Data.Aeson                     ( ToJSON )
 
 data Result = Result { _parse :: Exp
                      , _merge_lambdas :: Exp
+                     , _merge_lambdas_str :: String
                      , _lift :: Map String SC
+                     , _lift_str :: String
                      , _eta_reduce :: Map String SC
+                     , _eta_reduce_str :: String
                      , _remove_redundant_supercombinators :: Map String SC
+                     , _remove_redundant_supercombinators_str :: String
                      , _compile :: Map String [Asm]
                      , _compile_str :: String
                      , _optimise :: Map String [Asm]
@@ -82,9 +90,13 @@ generateResult input = case parse (parseExp <* eof) "<input>" input of
         optimisedAsm = Map.map removeRedundantInstructions asm
     in  Right $ Result expr
                        multi
+                       (show (printExp multi))
                        lifted
+                       (show (printDefinitions printSExp lifted))
                        eta'd
+                       (show (printDefinitions printSExp eta'd))
                        necessary
+                       (show (printDefinitions printSExp necessary))
                        asm
                        (printProgram asm)
                        optimisedAsm
@@ -139,7 +151,8 @@ lift = snd . lift' (0, mempty)
           -- insert the resulting supercombinator into the environment
           scs' = Map.insert ("_" <> show i) sc scs
           lam' = foldr (flip App . Var) (Global i) fvs
-      in                                                                                                                                                                                                                                                   -- replace the lambda with a variable applied to the free vars and repeat
+       -- replace the lambda with a variable applied to the free vars and repeat
+      in
           lift' (i + 1, scs') (hole lam')
     -- We've found a let f = \xs. e in body
     Just (Right (f, xs, e, body, hole)) ->
@@ -155,7 +168,8 @@ lift = snd . lift' (0, mempty)
           sc    = mkSC (fvs <> xs) e'
           -- insert the resulting supercombinator into the environment
           scs'  = Map.insert ("_" <> show i) sc scs
-      in                                                                                                                                                                                                                                                   -- replace the lambda with a variable applied to the free vars and repeat
+      -- replace the lambda with a variable applied to the free vars and repeat
+      in
           lift' (i + 1, scs') (hole body')
 
     Nothing -> (i, Map.insert "_main" (mkSC [] expr) scs)
@@ -417,18 +431,7 @@ parseVarString = try $ do
 
 keywords :: [String]
 keywords =
-  [ "if"
-  , "then"
-  , "else"
-  , "True"
-  , "False"
-  , "not"
-  , "and"
-  , "or"
-  , "fix"
-  , "let"
-  , "in"
-  ]
+  ["if", "then", "else", "True", "False", "not", "and", "or", "let", "in"]
 
 parsePrim :: Parser Prim
 parsePrim =
@@ -470,8 +473,7 @@ parseIf = do
   e <- parseExp
   pure $ If b t e
 
--- Lets are recursive and are converted into a combination of lambda and fixpoint:
--- let x = e1 in e2 ==> (\x. e2) (fix x. e1)
+-- Lets are recursive
 parseLet :: Parser Exp
 parseLet = do
   _ <- string "let"
