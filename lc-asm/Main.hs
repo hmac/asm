@@ -53,7 +53,7 @@ data Result = Result { _parse :: Exp
                      , _compile :: Map String [Asm]
                      , _compile_str :: String
                      , _optimise :: Map String [Asm]
-                     , _optimise_Str :: String
+                     , _optimise_str :: String
                      }
                      deriving (Generic)
 instance ToJSON Result
