@@ -30,7 +30,7 @@ run portStr handle = do
       Left err -> respond $ Wai.responseLBS
         status400
         corsHeader
-        (encode (Map.singleton "error" err))
+        (encode (Map.singleton ("error" :: String) err))
       Right response ->
         respond $ Wai.responseLBS status200 corsHeader (encode response)
   corsHeader = [("Access-Control-Allow-Origin", "*")]
