@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 module Server
   ( run
   )
@@ -28,7 +29,8 @@ run portStr handle = do
     case handle input of
       Left err -> respond $ Wai.responseLBS
         status400
-        mempty
+        corsHeader
         (encode (Map.singleton "error" err))
       Right response ->
-        respond $ Wai.responseLBS status200 mempty (encode response)
+        respond $ Wai.responseLBS status200 corsHeader (encode response)
+  corsHeader = [("Access-Control-Allow-Origin", "*")]
