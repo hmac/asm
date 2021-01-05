@@ -72,13 +72,12 @@ compile :: Register -> SExp -> Gen [Asm]
 compile r (SVar x) = do
   xi       <- asks stackCounter
   register <- lookupVar x <&> \case
-    Just (Stack i) ->
+    Stack i ->
       -- if the register is in stack position i, we want the offset
       -- from the stack pointer, which will be at stack position
       -- <length of stack - 1>.
       Stack (xi - i - 1)
-    Just r' -> r'
-    Nothing -> error $ "Unknown variable " <> show x
+    r' -> r'
   pure $ if register == Reg r then [] else [Mov (R (Reg r)) (R register)]
 
 -- Global labels
@@ -123,14 +122,11 @@ compile r (SNot e) = do
 -- Pop the arg registers
 compile r (SApp f args) = do
   let call = case f of
-        SVar x -> lookupVar x <&> \case
-          Just xr -> [Call (R xr), Mov (R (Reg r)) (R (Reg r0))]
-          Nothing -> error $ "Unknown variable " <> show x
+        SVar x ->
+          lookupVar x <&> \xr -> [Call (R xr), Mov (R (Reg r)) (R (Reg r0))]
         SGlobal l -> pure [Call (L l), Mov (R (Reg r)) (R (Reg r0))]
         _         -> error $ "Unexpected application head: " <> show f
-  compileArguments
-    (map (\(i, a) -> (i, compile (argReg i) a)) (zip [1 ..] args))
-    call
+  compileArguments (zip [1 ..] args) call
 
 -- If expressions
 -- --------------
@@ -157,10 +153,17 @@ compile r (SIf b t e) = do
     <> else_
     <> [Label endLabel]
 
-compileArguments :: [(Int, Gen [Asm])] -> Gen [Asm] -> Gen [Asm]
-compileArguments []              call = call
+compileArguments :: [(Int, SExp)] -> Gen [Asm] -> Gen [Asm]
+compileArguments []                   call = call
+-- if a is a variable already in argReg i, don't compile bother compiling it
+-- if it's a variable in another register, just move it to argReg i
+compileArguments ((i, SVar x) : args) call = do
+  xr <- lookupVar x
+  if xr == Reg (argReg i)
+    then compileArguments args call
+    else (Mov (R (Reg (argReg i))) (R xr) :) <$> compileArguments args call
 compileArguments ((i, a) : args) call = withRegister (argReg i) $ do
-  a_is <- a
+  a_is <- compile (argReg i) a
   rest <- compileArguments args call
   pure $ a_is <> rest
 
@@ -183,15 +186,15 @@ withScratchRegister g = do
   local (\env -> env { scratchRegisters = delta }) $ withRegister s (g s)
 
 
-lookupVar :: String -> Gen (Maybe PseudoReg)
+lookupVar :: String -> Gen PseudoReg
 lookupVar x = do
   gamma <- asks context
   m     <- asks renaming
   pure $ case lookup x gamma of
-    Nothing -> Nothing
+    Nothing -> error $ "Unknown variable " <> show x
     Just r  -> case lookup r m of
-      Just r' -> Just r'
-      Nothing -> Just (Reg r)
+      Just r' -> r'
+      Nothing -> Reg r
 
 newLabel :: Gen String
 newLabel = do

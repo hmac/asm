@@ -228,6 +228,7 @@ eta (vars, e) = case e of
     _ -> (vars, e)
   _ -> (vars, e)
 
+-- TODO: this may leave dangling references to the removed supers
 removeRedundant :: Map String SC -> Map String SC
 removeRedundant scs =
   let scs' = Map.filter (not . isRedundant) scs
