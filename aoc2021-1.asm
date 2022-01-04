@@ -34,7 +34,13 @@ _main:
   push r13
   push r14
   push r15
-  sub rsp, 8            ; not sure why we do this, but I think it's required
+  sub rsp, 8            ; Not 100%, but I think this is required so that the
+                        ; stack is aligned on a 16 byte boundary.
+                        ; The act of entering this _main function has pushed the
+                        ; previous stack pointer (rbp) on to the stack, so rsp
+                        ; is out of alignment by 64 bits (8 bytes).
+                        ; Subtracting a further 8 bytes puts it back in
+                        ; alignment.
 
                         ; Now we need to read the numbers from STDIN.
                         ; Each line is either 3 or 4 digits, followed by a
