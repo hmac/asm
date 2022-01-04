@@ -52,13 +52,13 @@ _main:
 
   sub rsp, 0x10000      ; Allocate 2^16 (65536) bytes on the stack
   
-  mov rax, 0x2000003    ; Call read(STDIN, &rsp, 64)
+  mov rax, 0x2000003    ; Call read(STDIN, &rsp, 2^16)
   mov rdi, 0
   mov rsi, rsp
   mov rdx, 0x10000
   syscall
 
-                        ; We now have (at most) 64 bytes from STDIN at address
+                        ; We now have (at most) 2^16 bytes from STDIN at address
                         ; rsp. rax holds the actual number of bytes read, which
                         ; we'll use to ensure we don't process any garbage.
   mov r14, rax
