@@ -45,7 +45,10 @@ _main:
                         ; Now we need to read the numbers from STDIN.
                         ; Each line is either 3 or 4 digits, followed by a
                         ; newline.
-                        ; To start let's just read 64 bytes of input
+                        ; To start let's just read all the input.
+                        ; The input file is 2000 lines, with a max of 5 bytes (4
+                        ; + newline) per line, for a total of 10 KB.
+                        ; We'll make a 65 KB buffer just to be safe.
 
   sub rsp, 0x10000      ; Allocate 2^16 (65536) bytes on the stack
   
