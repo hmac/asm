@@ -91,7 +91,7 @@ _main:
   mov r12, rsp          ; 5. The address of the end of the buffer (r12).
                         ;    This is the end of the portion of the buffer that
                         ;    contains data - it might be smaller than the actual
-                        ;    buffer if the input file is < 64 butes.
+                        ;    buffer if the input file is < 65 KB.
   add r12, rax          ; rax holds the actual number of bytes read by the read
                         ; call.
   mov r13, 0            ; 6. A scratch register to help with multiplication (r13)
