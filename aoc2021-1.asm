@@ -15,15 +15,14 @@
 ; -------------------------
 ; read | 3      | read(int fd, user_addr_t cbuf, user_size_t nbyte)
 ; write| 4      | write(int fd, user_addr_t cbuf, user_size_t nbyte)
+
 DEFAULT REL
 
 global _main
-extern _printf
-extern _getline
 
 section .data
-; storage for static data
-; not used yet
+                        ; storage for static data
+                        ; not used
 
 section .text
 
