@@ -1,4 +1,4 @@
-all: test p13
+all: test p13 aoc2021-1
 
 %.o: %.asm
 	nasm -f macho64 -g -F dwarf -w+all $*.asm 
