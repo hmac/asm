@@ -189,31 +189,7 @@ md5_chunk:
   xor r9, r9
   mov r9d, [rsp+20]
 
-; TODO: the loop below can be structured better:
-; for i in 0..=15:
-;   ...
-; for i in 16..=31:
-;   ...
-; for i in 32..=47:
-;   ...
-; for i in 48..=63:
-;   ...
-
-; for i in 0 to 63:
-; r10 = i
-  mov r10, 0
-md5_chunk_loop_start:
-  ; if i >= 48:
-  cmp r10d, 48
-  jge md5_chunk_i_63
-  ; if i >= 32:
-  cmp r10d, 32
-  jge md5_chunk_i_47
-  ; if i >= 16:
-  cmp r10d, 16
-  jge md5_chunk_i_31
-
-  ; otherwise:
+; for i in 0 to 15:
 md5_chunk_i_15:
   ; F = (b and c) or ((not b) and d)
   ; r12 = not b
@@ -228,8 +204,50 @@ md5_chunk_i_15:
   or r12d, r14d
   ; g = i
   mov r13d, r10d
-  jmp md5_chunk_loop_final
 
+  ; ----------
+  ; POST-ROUND
+  ; ----------
+  ; F = F + A + K[i] + M[g] (M[g] is the gth 32-bit word in the chunk)
+  ; A = D
+  ; D = C
+  ; C = B
+  ; B = B + leftrotate(F, s[i])
+  ; r11 = M[g]
+  mov r11d, [4*r13 + rsi] ; r11 = M[4*g]
+  ; rdi = K[i]
+  mov rdi, k
+  add rdi, r10
+  mov edi, [rdi]
+  ; r11 = r11 + edi
+  add r11d, edi
+  ; r11 = r11 + A
+  add r11d, ecx
+  ; r11 = r11 + F
+  add r11d, r12d
+  ; A = D
+  mov ecx, r9d
+  ; D = C
+  mov r9d, r8d
+  ; C = B
+  mov r8d, r15d
+  ; B = B + leftrotate(F, s[i])
+  ; cl = s[i]
+  push rcx
+  mov rdi, s
+  add rdi, r10
+  mov cl, [rdi]
+  ; F = leftrotate(F, s[i])
+  rol r12d, cl ; second arg must be in cl register (or immediate)
+  pop rcx
+  ; B = B + r12d
+  add r15d, r12d
+
+  inc r10
+  cmp r10d, 15
+  jle md5_chunk_i_15
+
+; for i in 16 to 31:
 md5_chunk_i_31:
   ; F = (d and b) or ((not d) and c)
   ; r12 = not d
@@ -251,8 +269,50 @@ md5_chunk_i_31:
   inc r13d
   ; r13 = r13 mod 16
   and r13d, 0xf
-  jmp md5_chunk_loop_final
 
+  ; ----------
+  ; POST-ROUND
+  ; ----------
+  ; F = F + A + K[i] + M[g] (M[g] is the gth 32-bit word in the chunk)
+  ; A = D
+  ; D = C
+  ; C = B
+  ; B = B + leftrotate(F, s[i])
+  ; r11 = M[g]
+  mov r11d, [4*r13 + rsi] ; r11 = M[4*g]
+  ; rdi = K[i]
+  mov rdi, k
+  add rdi, r10
+  mov edi, [rdi]
+  ; r11 = r11 + edi
+  add r11d, edi
+  ; r11 = r11 + A
+  add r11d, ecx
+  ; r11 = r11 + F
+  add r11d, r12d
+  ; A = D
+  mov ecx, r9d
+  ; D = C
+  mov r9d, r8d
+  ; C = B
+  mov r8d, r15d
+  ; B = B + leftrotate(F, s[i])
+  ; cl = s[i]
+  push rcx
+  mov rdi, s
+  add rdi, r10
+  mov cl, [rdi]
+  ; F = leftrotate(F, s[i])
+  rol r12d, cl ; second arg must be in cl register (or immediate)
+  pop rcx
+  ; B = B + r12d
+  add r15d, r12d
+
+  inc r10
+  cmp r10d, 31
+  jle md5_chunk_i_31
+
+; for i in 32 to 47:
 md5_chunk_i_47:
   ; F = b xor c xor d
   ; r12 = c xor d
@@ -269,51 +329,33 @@ md5_chunk_i_47:
   add r13d, 5
   ; r13 = r13 mod 16 (equiv to keeping the lowest 4 bits)
   and r13d, 0xf
-  jmp md5_chunk_loop_final
 
-; 48 <= i <= 63
-md5_chunk_i_63:
-  ; F = c xor (b or (not d))
-  ; r12 = not d
-  mov r12d, r9d
-  not r12d
-  ; r12 = r12 or b
-  or r12d, r15d
-  ; r12 = r12 xor c
-  xor r12d, r8d
-  ; g = i
-  mov r13d, r10d
-  jmp md5_chunk_loop_final
-
-md5_chunk_loop_final:
+  ; ----------
+  ; POST-ROUND
+  ; ----------
   ; F = F + A + K[i] + M[g] (M[g] is the gth 32-bit word in the chunk)
   ; A = D
   ; D = C
   ; C = B
   ; B = B + leftrotate(F, s[i])
-
   ; r11 = M[g]
   mov r11d, [4*r13 + rsi] ; r11 = M[4*g]
-
   ; rdi = K[i]
   mov rdi, k
   add rdi, r10
   mov edi, [rdi]
-
   ; r11 = r11 + edi
   add r11d, edi
   ; r11 = r11 + A
   add r11d, ecx
   ; r11 = r11 + F
   add r11d, r12d
-
   ; A = D
   mov ecx, r9d
   ; D = C
   mov r9d, r8d
   ; C = B
   mov r8d, r15d
-
   ; B = B + leftrotate(F, s[i])
   ; cl = s[i]
   push rcx
@@ -326,9 +368,64 @@ md5_chunk_loop_final:
   ; B = B + r12d
   add r15d, r12d
 
-  inc r10d
-  cmp r10d, 64
-  jl md5_chunk_loop_start
+  inc r10
+  cmp r10d, 47
+  jle md5_chunk_i_47
+
+; for i in 48 to 63:
+md5_chunk_i_63:
+  ; F = c xor (b or (not d))
+  ; r12 = not d
+  mov r12d, r9d
+  not r12d
+  ; r12 = r12 or b
+  or r12d, r15d
+  ; r12 = r12 xor c
+  xor r12d, r8d
+  ; g = i
+  mov r13d, r10d
+
+  ; ----------
+  ; POST-ROUND
+  ; ----------
+  ; F = F + A + K[i] + M[g] (M[g] is the gth 32-bit word in the chunk)
+  ; A = D
+  ; D = C
+  ; C = B
+  ; B = B + leftrotate(F, s[i])
+  ; r11 = M[g]
+  mov r11d, [4*r13 + rsi] ; r11 = M[4*g]
+  ; rdi = K[i]
+  mov rdi, k
+  add rdi, r10
+  mov edi, [rdi]
+  ; r11 = r11 + edi
+  add r11d, edi
+  ; r11 = r11 + A
+  add r11d, ecx
+  ; r11 = r11 + F
+  add r11d, r12d
+  ; A = D
+  mov ecx, r9d
+  ; D = C
+  mov r9d, r8d
+  ; C = B
+  mov r8d, r15d
+  ; B = B + leftrotate(F, s[i])
+  ; cl = s[i]
+  push rcx
+  mov rdi, s
+  add rdi, r10
+  mov cl, [rdi]
+  ; F = leftrotate(F, s[i])
+  rol r12d, cl ; second arg must be in cl register (or immediate)
+  pop rcx
+  ; B = B + r12d
+  add r15d, r12d
+
+  inc r10
+  cmp r10d, 63
+  jle md5_chunk_i_63
 
 md5_chunk_loop_end:
   ; a = a + A
