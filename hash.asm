@@ -189,18 +189,31 @@ md5_chunk:
   xor r9, r9
   mov r9d, [rsp+20]
 
+; TODO: the loop below can be structured better:
+; for i in 0..=15:
+;   ...
+; for i in 16..=31:
+;   ...
+; for i in 32..=47:
+;   ...
+; for i in 48..=63:
+;   ...
+
 ; for i in 0 to 63:
 ; r10 = i
   mov r10, 0
 md5_chunk_loop_start:
-  ; if i <= 15:
-  cmp r10d, 15
-  jle md5_chunk_i_15
-  cmp r10d, 31
-  jle md5_chunk_i_31
-  cmp r10d, 47
-  jle md5_chunk_i_47
+  ; if i >= 48:
+  cmp r10d, 48
+  jge md5_chunk_i_63
+  ; if i >= 32:
+  cmp r10d, 32
+  jge md5_chunk_i_47
+  ; if i >= 16:
+  cmp r10d, 16
+  jge md5_chunk_i_31
 
+  ; otherwise:
 md5_chunk_i_15:
   ; F = (b and c) or ((not b) and d)
   ; r12 = not b
@@ -302,13 +315,12 @@ md5_chunk_loop_final:
   mov r8d, r15d
 
   ; B = B + leftrotate(F, s[i])
-  ; edi = s[i]
+  ; cl = s[i]
+  push rcx
   mov rdi, s
   add rdi, r10
-  mov edi, [rdi]
+  mov cl, [rdi]
   ; F = leftrotate(F, s[i])
-  push rcx
-  mov cl, dil ; dil is lowest byte of rdi
   rol r12d, cl ; second arg must be in cl register (or immediate)
   pop rcx
   ; B = B + r12d
