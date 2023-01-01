@@ -154,10 +154,10 @@ md5_pad:
   ; So if (length % 64) > 64 - 9, we need to extend it by another 64 bytes.
   ; Otherwise we just need to add our padding.
   cmp dl, 55
-  jle md5_pad_padding
+  jle .padding
   add rsi, 64           ; add 64 bytes
   
-md5_pad_padding:
+.padding:
   ; The distance to the next multiple is 64 - (length % 64)
   ; Extend the length by this amount
   neg dl                ; 0 - (length % 64)
@@ -190,7 +190,7 @@ md5_chunk:
   mov r9d, [rsp+20]
 
 ; for i in 0 to 15:
-md5_chunk_i_15:
+.i_15:
   ; F = (b and c) or ((not b) and d)
   ; r12 = not b
   mov r12d, r15d
@@ -205,50 +205,14 @@ md5_chunk_i_15:
   ; g = i
   mov r13d, r10d
 
-  ; ----------
-  ; POST-ROUND
-  ; ----------
-  ; F = F + A + K[i] + M[g] (M[g] is the gth 32-bit word in the chunk)
-  ; A = D
-  ; D = C
-  ; C = B
-  ; B = B + leftrotate(F, s[i])
-  ; r11 = M[g]
-  mov r11d, [4*r13 + rsi] ; r11 = M[4*g]
-  ; rdi = K[i]
-  mov rdi, k
-  add rdi, r10
-  mov edi, [rdi]
-  ; r11 = r11 + edi
-  add r11d, edi
-  ; r11 = r11 + A
-  add r11d, ecx
-  ; r11 = r11 + F
-  add r11d, r12d
-  ; A = D
-  mov ecx, r9d
-  ; D = C
-  mov r9d, r8d
-  ; C = B
-  mov r8d, r15d
-  ; B = B + leftrotate(F, s[i])
-  ; cl = s[i]
-  push rcx
-  mov rdi, s
-  add rdi, r10
-  mov cl, [rdi]
-  ; F = leftrotate(F, s[i])
-  rol r12d, cl ; second arg must be in cl register (or immediate)
-  pop rcx
-  ; B = B + r12d
-  add r15d, r12d
+  call .post_round
 
   inc r10
   cmp r10d, 15
-  jle md5_chunk_i_15
+  jle .i_15
 
 ; for i in 16 to 31:
-md5_chunk_i_31:
+.i_31:
   ; F = (d and b) or ((not d) and c)
   ; r12 = not d
   mov r12d, r9d
@@ -270,50 +234,14 @@ md5_chunk_i_31:
   ; r13 = r13 mod 16
   and r13d, 0xf
 
-  ; ----------
-  ; POST-ROUND
-  ; ----------
-  ; F = F + A + K[i] + M[g] (M[g] is the gth 32-bit word in the chunk)
-  ; A = D
-  ; D = C
-  ; C = B
-  ; B = B + leftrotate(F, s[i])
-  ; r11 = M[g]
-  mov r11d, [4*r13 + rsi] ; r11 = M[4*g]
-  ; rdi = K[i]
-  mov rdi, k
-  add rdi, r10
-  mov edi, [rdi]
-  ; r11 = r11 + edi
-  add r11d, edi
-  ; r11 = r11 + A
-  add r11d, ecx
-  ; r11 = r11 + F
-  add r11d, r12d
-  ; A = D
-  mov ecx, r9d
-  ; D = C
-  mov r9d, r8d
-  ; C = B
-  mov r8d, r15d
-  ; B = B + leftrotate(F, s[i])
-  ; cl = s[i]
-  push rcx
-  mov rdi, s
-  add rdi, r10
-  mov cl, [rdi]
-  ; F = leftrotate(F, s[i])
-  rol r12d, cl ; second arg must be in cl register (or immediate)
-  pop rcx
-  ; B = B + r12d
-  add r15d, r12d
+  call .post_round
 
   inc r10
   cmp r10d, 31
-  jle md5_chunk_i_31
+  jle .i_31
 
 ; for i in 32 to 47:
-md5_chunk_i_47:
+.i_47:
   ; F = b xor c xor d
   ; r12 = c xor d
   mov r12d, r8d
@@ -330,50 +258,14 @@ md5_chunk_i_47:
   ; r13 = r13 mod 16 (equiv to keeping the lowest 4 bits)
   and r13d, 0xf
 
-  ; ----------
-  ; POST-ROUND
-  ; ----------
-  ; F = F + A + K[i] + M[g] (M[g] is the gth 32-bit word in the chunk)
-  ; A = D
-  ; D = C
-  ; C = B
-  ; B = B + leftrotate(F, s[i])
-  ; r11 = M[g]
-  mov r11d, [4*r13 + rsi] ; r11 = M[4*g]
-  ; rdi = K[i]
-  mov rdi, k
-  add rdi, r10
-  mov edi, [rdi]
-  ; r11 = r11 + edi
-  add r11d, edi
-  ; r11 = r11 + A
-  add r11d, ecx
-  ; r11 = r11 + F
-  add r11d, r12d
-  ; A = D
-  mov ecx, r9d
-  ; D = C
-  mov r9d, r8d
-  ; C = B
-  mov r8d, r15d
-  ; B = B + leftrotate(F, s[i])
-  ; cl = s[i]
-  push rcx
-  mov rdi, s
-  add rdi, r10
-  mov cl, [rdi]
-  ; F = leftrotate(F, s[i])
-  rol r12d, cl ; second arg must be in cl register (or immediate)
-  pop rcx
-  ; B = B + r12d
-  add r15d, r12d
+  call .post_round
 
   inc r10
   cmp r10d, 47
-  jle md5_chunk_i_47
+  jle .i_47
 
 ; for i in 48 to 63:
-md5_chunk_i_63:
+.i_63:
   ; F = c xor (b or (not d))
   ; r12 = not d
   mov r12d, r9d
@@ -385,9 +277,27 @@ md5_chunk_i_63:
   ; g = i
   mov r13d, r10d
 
-  ; ----------
-  ; POST-ROUND
-  ; ----------
+  call .post_round
+
+  inc r10
+  cmp r10d, 63
+  jle .i_63
+
+.end:
+  ; a = a + A
+  ; b = b + B
+  ; c = c + C
+  ; d = d + D
+  add [rsp+8], ecx
+  add [rsp+12], r15d
+  add [rsp+16], r8d
+  add [rsp+20], r9d
+  
+  ret
+
+; Called after each round.
+; Return address is on top of stack
+.post_round:
   ; F = F + A + K[i] + M[g] (M[g] is the gth 32-bit word in the chunk)
   ; A = D
   ; D = C
@@ -422,21 +332,6 @@ md5_chunk_i_63:
   pop rcx
   ; B = B + r12d
   add r15d, r12d
-
-  inc r10
-  cmp r10d, 63
-  jle md5_chunk_i_63
-
-md5_chunk_loop_end:
-  ; a = a + A
-  ; b = b + B
-  ; c = c + C
-  ; d = d + D
-  add [rsp+8], ecx
-  add [rsp+12], r15d
-  add [rsp+16], r8d
-  add [rsp+20], r9d
-  
   ret
 
 ; void print_hex(char: [u8], len: u64)
@@ -454,7 +349,7 @@ print_hex:
 ; For each byte, look up the corresponding hex digit (two bytes)
 ; Write these two bytes to the output array and increment r9
 
-print_hex_loop_start:
+.loop:
   mov r10, 0
   mov r11b, [rdi]
   add r10b, r11b
@@ -466,9 +361,8 @@ print_hex_loop_start:
   add r9, 2
   inc rdi
   cmp rdi, r8
-  jl print_hex_loop_start
+  jl .loop
 
-print_hex_loop_end:
   push rsi
   mov rdx, rsi          ; Set rdx to the output length in bytes (twice the input length)
   add rdx, rdx
