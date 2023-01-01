@@ -117,7 +117,7 @@ main_end:
 
   mov rdi, rsp
   mov rsi, 16
-  call _print_hex
+  call print_hex
 
   ; Print a newline
   mov rax, 0x2000004    ; write(STDOUT, &newline, 1)
@@ -192,16 +192,16 @@ md5_chunk:
 ; for i in 0 to 63:
 ; r10 = i
   mov r10, 0
-_calc_md5_loop_start:
+md5_chunk_loop_start:
   ; if i <= 15:
   cmp r10d, 15
-  jle _calc_md5_i_15
+  jle md5_chunk_i_15
   cmp r10d, 31
-  jle _calc_md5_i_31
+  jle md5_chunk_i_31
   cmp r10d, 47
-  jle _calc_md5_i_47
+  jle md5_chunk_i_47
 
-_calc_md5_i_15:
+md5_chunk_i_15:
   ; F = (b and c) or ((not b) and d)
   ; r12 = not b
   mov r12d, r15d
@@ -215,9 +215,9 @@ _calc_md5_i_15:
   or r12d, r14d
   ; g = i
   mov r13d, r10d
-  jmp _calc_md5_loop_final
+  jmp md5_chunk_loop_final
 
-_calc_md5_i_31:
+md5_chunk_i_31:
   ; F = (d and b) or ((not d) and c)
   ; r12 = not d
   mov r12d, r9d
@@ -238,9 +238,9 @@ _calc_md5_i_31:
   inc r13d
   ; r13 = r13 mod 16
   and r13d, 0xf
-  jmp _calc_md5_loop_final
+  jmp md5_chunk_loop_final
 
-_calc_md5_i_47:
+md5_chunk_i_47:
   ; F = b xor c xor d
   ; r12 = c xor d
   mov r12d, r8d
@@ -256,10 +256,10 @@ _calc_md5_i_47:
   add r13d, 5
   ; r13 = r13 mod 16 (equiv to keeping the lowest 4 bits)
   and r13d, 0xf
-  jmp _calc_md5_loop_final
+  jmp md5_chunk_loop_final
 
 ; 48 <= i <= 63
-_calc_md5_i_63:
+md5_chunk_i_63:
   ; F = c xor (b or (not d))
   ; r12 = not d
   mov r12d, r9d
@@ -270,9 +270,9 @@ _calc_md5_i_63:
   xor r12d, r8d
   ; g = i
   mov r13d, r10d
-  jmp _calc_md5_loop_final
+  jmp md5_chunk_loop_final
 
-_calc_md5_loop_final:
+md5_chunk_loop_final:
   ; F = F + A + K[i] + M[g] (M[g] is the gth 32-bit word in the chunk)
   ; A = D
   ; D = C
@@ -316,9 +316,9 @@ _calc_md5_loop_final:
 
   inc r10d
   cmp r10d, 64
-  jl _calc_md5_loop_start
+  jl md5_chunk_loop_start
 
-_calc_md5_loop_end:
+md5_chunk_loop_end:
   ; a = a + A
   ; b = b + B
   ; c = c + C
@@ -332,7 +332,7 @@ _calc_md5_loop_end:
 
 ; void print_hex(char: [u8], len: u64)
 ;                rdi         rsi
-_print_hex:
+print_hex:
 ; Save the position of the last char
   mov r8, rdi
   add r8, rsi
@@ -345,7 +345,7 @@ _print_hex:
 ; For each byte, look up the corresponding hex digit (two bytes)
 ; Write these two bytes to the output array and increment r9
 
-_print_hex_loop_start:
+print_hex_loop_start:
   mov r10, 0
   mov r11b, [rdi]
   add r10b, r11b
@@ -357,9 +357,9 @@ _print_hex_loop_start:
   add r9, 2
   inc rdi
   cmp rdi, r8
-  jl _print_hex_loop_start
+  jl print_hex_loop_start
 
-_print_hex_loop_end:
+print_hex_loop_end:
   push rsi
   mov rdx, rsi          ; Set rdx to the output length in bytes (twice the input length)
   add rdx, rdx
