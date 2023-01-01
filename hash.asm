@@ -40,14 +40,14 @@ main:
                         ; We read in 64 byte chunks, but the last chunk may be padded into two
                         ; chunks so we need space for that.
 
-  ; Initialise the MD5 variables on the stack
+                        ; Initialise the MD5 variables on the stack
   sub rsp, 32
   mov dword [rsp], 0x67452301       ; A
   mov dword [rsp+4], 0xefcdab89     ; B
   mov dword [rsp+8], 0x98badcfe     ; C
   mov dword [rsp+12], 0x10325476    ; D
 
-main_loop_start:
+.loop:
   mov rax, 0            ; Zero out the input array
   mov [rsp+16], rax         
   mov [rsp+24], rax
@@ -72,43 +72,42 @@ main_loop_start:
   mov rdx, 64
   syscall
 
-  lea rdi, [rsp+16]          ; rdi holds the pointer to the input we've read
+  lea rdi, [rsp+16]     ; rdi holds the pointer to the input we've read
 
-  ; If we've read less than 64 bytes, this is the last chunk.
-  ; We need to pad this chunk.
+                        ; If we've read less than 64 bytes, this is the last chunk.
+                        ; We need to pad this chunk.
   cmp rax, 64
-  jl main_last_chunk
+  jl .last_chunk
 
-main_call_md5:
   mov rsi, rdi
   call md5_chunk
-  jmp main_loop_start
+  jmp .loop
 
-main_last_chunk:
-  ; Apply padding to the last chunk.
-  ; This may spill over into a second chunk.
+.last_chunk:
+                        ; Apply padding to the last chunk.
+                        ; This may spill over into a second chunk.
   lea rdi, [rsp+16]
   mov rsi, rax
   call md5_pad
 
-  ; If the new array length is > 64 bytes then the padding has spilled into a second chunk,
-  ; so we need to run md5 twice.
+                        ; If the new array length is > 64 bytes then the padding has spilled into a
+                        ; second chunk, so we need to run md5 twice.
   cmp rax, 64
-  jle main_last_chunk_single
+  jle .last_chunk_single
 
   mov rsi, rdi
   call md5_chunk
   call md5_chunk
-  jmp main_end
+  jmp .end
 
-main_last_chunk_single:
+.last_chunk_single:
 
   mov rsi, rdi
   lea rdx, [rsp+128]
   call md5_chunk
 
-main_end:
-  ; Store the MD5 hash
+.end:
+                        ; Store the MD5 hash
   sub rsp, 16           ; Allocate 16 bytes for the md5 hash.
   mov [rsp], ecx
   mov [rsp+4], r15d
@@ -119,7 +118,7 @@ main_end:
   mov rsi, 16
   call print_hex
 
-  ; Print a newline
+                        ; Print a newline
   mov rax, 0x2000004    ; write(STDOUT, &newline, 1)
   mov rdi, 1
   lea rsi, newline
@@ -140,34 +139,34 @@ main_end:
 md5_pad:
   mov rcx, rsi          ; Save the original array length
 
-  ; First, we add the mandatory byte 0x80 to the end of the array. This is required regardless of
-  ; the length of the array.
+                        ; First, we add the mandatory byte 0x80 to the end of the array. This is
+                        ; required regardless of the length of the array.
   mov byte [rdi + rsi], 0x80
 
-  ; sil (low byte of rsi) = length % 256
-  ; so if we mask off the top two bits, we get length % 64
+                        ; sil (low byte of rsi) = length % 256
+                        ; so if we mask off the top two bits, we get length % 64
   mov dl, sil
-  and dl, 0x3F ; 0011 1111
+  and dl, 0x3F          ; 0x3F = 0011 1111
 
-  ; we need enough space between the length and the next multiple of 64 to fit our 1 byte of
-  ; mandatory padding, followed by the length of the message as a u64 (8 bytes).
-  ; So if (length % 64) > 64 - 9, we need to extend it by another 64 bytes.
-  ; Otherwise we just need to add our padding.
+                        ; we need enough space between the length and the next multiple of 64 to fit
+                        ; our 1 byte of mandatory padding, followed by the length of the message as
+                        ; a u64 (8 bytes). So if (length % 64) > 64 - 9, we need to extend it by
+                        ; another 64 bytes. Otherwise we just need to add our padding.
   cmp dl, 55
   jle .padding
   add rsi, 64           ; add 64 bytes
   
 .padding:
-  ; The distance to the next multiple is 64 - (length % 64)
-  ; Extend the length by this amount
+                        ; The distance to the next multiple is 64 - (length % 64)
+                        ; Extend the length by this amount
   neg dl                ; 0 - (length % 64)
   add dl, 64            ; 0 - (length % 64) + 64 = 64 - (length % 64)
   add sil, dl
 
-  ; Now store the (original) array length as a u64 in the last 8 bytes of the array.
+                        ; Now store the (original) array length as a u64 in the last 8 bytes of the
+                        ; array.
   mov [rdi + rsi - 8], rcx
 
-  ; We're done.
   mov rax, rsi
   ret
 
@@ -176,33 +175,29 @@ md5_pad:
 ; md5_chunk(chunk: [u8; 64], a: u32, b: u32, c: u32, d: u32)
 ;          rsi               rsp+8   rsp+12  rsp+16  rsp+20
 md5_chunk:
-; a = ecx
-  xor rcx, rcx
+  xor rcx, rcx          ; a = ecx
   mov ecx, [rsp+8]
-; b = r15d
-  xor r15, r15
+  xor r15, r15          ; b = r15d
   mov r15d, [rsp+12]
-; c = r8d
-  xor r8, r8
+  xor r8, r8            ; c = r8d
   mov r8d, [rsp+16]
-; d = r9d
-  xor r9, r9
+  xor r9, r9            ; d = r9d
   mov r9d, [rsp+20]
 
 ; for i in 0 to 15:
 .i_15:
-  ; F = (b and c) or ((not b) and d)
-  ; r12 = not b
+                        ; F = (b and c) or ((not b) and d)
+                        ; r12 = not b
   mov r12d, r15d
   not r12d
-  ; r12 = r12 and d
+                        ; r12 = r12 and d
   and r12d, r9d
-  ; r14 = b and c
+                        ; r14 = b and c
   mov r14d, r15d
   and r14d, r8d
-  ; r12 = r14 or r12
+                        ; r12 = r14 or r12
   or r12d, r14d
-  ; g = i
+                        ; g = i
   mov r13d, r10d
 
   call .post_round
@@ -213,25 +208,25 @@ md5_chunk:
 
 ; for i in 16 to 31:
 .i_31:
-  ; F = (d and b) or ((not d) and c)
-  ; r12 = not d
+                        ; F = (d and b) or ((not d) and c)
+                        ; r12 = not d
   mov r12d, r9d
   not r12d
-  ; r12 = r12 and c
+                        ; r12 = r12 and c
   and r12d, r8d
-  ; r14 = d and b
+                        ; r14 = d and b
   mov r14d, r9d
   and r14d, r15d
-  ; r12 = r12 or r14
+                        ; r12 = r12 or r14
   or r12d, r14d
-  ; g = (5*i + 1) mod 16
-  ; r13 = 5 * i
+                        ; g = (5*i + 1) mod 16
+                        ; r13 = 5 * i
   mov r13d, r10d
   mov eax, 5
   mul r13d
-  ; r13 = r13 + 1
+                        ; r13 = r13 + 1
   inc r13d
-  ; r13 = r13 mod 16
+                        ; r13 = r13 mod 16
   and r13d, 0xf
 
   call .post_round
@@ -242,20 +237,20 @@ md5_chunk:
 
 ; for i in 32 to 47:
 .i_47:
-  ; F = b xor c xor d
-  ; r12 = c xor d
+                        ; F = b xor c xor d
+                        ; r12 = c xor d
   mov r12d, r8d
   xor r12d, r9d
-  ; r12 = r12 xor b
+                        ; r12 = r12 xor b
   xor r12d, r15d
-  ; g = (3*i + 5) mod 16
-  ; r13 = 3 * i
+                        ; g = (3*i + 5) mod 16
+                        ; r13 = 3 * i
   mov r13d, r10d
   mov eax, 3
   mul r13d
-  ; r13 = r13 + 5
+                        ; r13 = r13 + 5
   add r13d, 5
-  ; r13 = r13 mod 16 (equiv to keeping the lowest 4 bits)
+                        ; r13 = r13 mod 16 (equiv to keeping the lowest 4 bits)
   and r13d, 0xf
 
   call .post_round
@@ -266,15 +261,15 @@ md5_chunk:
 
 ; for i in 48 to 63:
 .i_63:
-  ; F = c xor (b or (not d))
-  ; r12 = not d
+                        ; F = c xor (b or (not d))
+                        ; r12 = not d
   mov r12d, r9d
   not r12d
-  ; r12 = r12 or b
+                        ; r12 = r12 or b
   or r12d, r15d
-  ; r12 = r12 xor c
+                        ; r12 = r12 xor c
   xor r12d, r8d
-  ; g = i
+                        ; g = i
   mov r13d, r10d
 
   call .post_round
@@ -284,70 +279,59 @@ md5_chunk:
   jle .i_63
 
 .end:
-  ; a = a + A
-  ; b = b + B
-  ; c = c + C
-  ; d = d + D
-  add [rsp+8], ecx
-  add [rsp+12], r15d
-  add [rsp+16], r8d
-  add [rsp+20], r9d
+  add [rsp+8], ecx      ; a = a + A
+  add [rsp+12], r15d    ; b = b + B
+  add [rsp+16], r8d     ; c = c + C
+  add [rsp+20], r9d     ; d = d + D
   
   ret
 
 ; Called after each round.
 ; Return address is on top of stack
 .post_round:
-  ; F = F + A + K[i] + M[g] (M[g] is the gth 32-bit word in the chunk)
-  ; A = D
-  ; D = C
-  ; C = B
-  ; B = B + leftrotate(F, s[i])
-  ; r11 = M[g]
-  mov r11d, [4*r13 + rsi] ; r11 = M[4*g]
-  ; rdi = K[i]
+                        ; F = F + A + K[i] + M[g] (M[g] is the gth 32-bit word in the chunk)
+                        ; A = D
+                        ; D = C
+                        ; C = B
+                        ; B = B + leftrotate(F, s[i])
+                        ; r11 = M[4*g]
+  mov r11d, [4*r13 + rsi]
   mov rdi, k
-  add rdi, r10
+  add rdi, r10          ; rdi = K[i]
   mov edi, [rdi]
-  ; r11 = r11 + edi
-  add r11d, edi
-  ; r11 = r11 + A
-  add r11d, ecx
-  ; r11 = r11 + F
-  add r11d, r12d
-  ; A = D
-  mov ecx, r9d
-  ; D = C
-  mov r9d, r8d
-  ; C = B
-  mov r8d, r15d
-  ; B = B + leftrotate(F, s[i])
-  ; cl = s[i]
+  add r11d, edi         ; r11 = r11 + edi
+  add r11d, ecx         ; r11 = r11 + A
+  add r11d, r12d        ; r11 = r11 + F
+  mov ecx, r9d          ; A = D
+  mov r9d, r8d          ; D = C
+  mov r8d, r15d         ; C = B
+                        ; B = B + leftrotate(F, s[i])
+                        ; cl = s[i]
   push rcx
   mov rdi, s
   add rdi, r10
   mov cl, [rdi]
-  ; F = leftrotate(F, s[i])
-  rol r12d, cl ; second arg must be in cl register (or immediate)
+                        ; F = leftrotate(F, s[i])
+  rol r12d, cl          ; second arg must be in cl register (or immediate)
   pop rcx
-  ; B = B + r12d
+                        ; B = B + r12d
   add r15d, r12d
   ret
 
 ; void print_hex(char: [u8], len: u64)
 ;                rdi         rsi
 print_hex:
-; Save the position of the last char
+                        ; Save the position of the last char
   mov r8, rdi
   add r8, rsi
-; Reserve stack space for the result, which is twice the size of the input
+                        ; Reserve stack space for the result, which is twice the size of the input
   sub rsp, rsi
   sub rsp, rsi
-; Save a pointer to the output array in r9
+                        ; Save a pointer to the output array in r9
   mov r9, rsp
-; Now increment rdi until it reaches r8
-; For each byte, look up the corresponding hex digit (two bytes)
-; Write these two bytes to the output array and increment r9
+                        ; Now increment rdi until it reaches r8
+                        ; For each byte, look up the corresponding hex digit (two bytes)
+                        ; Write these two bytes to the output array and increment r9
 
 .loop:
   mov r10, 0
@@ -367,13 +351,11 @@ print_hex:
   mov rdx, rsi          ; Set rdx to the output length in bytes (twice the input length)
   add rdx, rdx
 
-  ; Print the output array
   mov rax, 0x2000004    ; write(STDOUT, &rsp, rdx)
   mov rdi, 1
   lea rsi, [rsp + 8]    ; the `push rsi` on L327 means the output array is offset from rsp
   syscall
 
-  ; Clean up and exit
   pop rsi
   lea rsp, [rsp + 2*rsi]
   ret
