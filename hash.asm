@@ -34,32 +34,94 @@ _exit:
   ret                   ; Exit.
 
 main:
-  sub rsp, 64          ; Allocate 64 bytes on the stack
+  sub rsp, 128          ; Allocate 128 bytes for the input.
+                        ; We read in 64 byte chunks, but the last chunk may be padded into two
+                        ; chunks so we need space for that.
 
-  mov rax, 0           ; Zero out all 64 bytes 
-  mov [rsp], rax         
-  mov [rsp+8], rax
-  mov [rsp+16], rax
+  ; Initialise the MD5 variables on the stack
+  ; mov ecx, 0x67452301   ; A = ecx
+  ; mov r15d, 0xefcdab89  ; B = r15d
+  ; mov r8d, 0x98badcfe   ; C = r8d
+  ; mov r9d, 0x10325476   ; D = r9d
+  sub rsp, 32
+  mov dword [rsp], 0x67452301       ; A
+  mov dword [rsp+4], 0xefcdab89     ; B
+  mov dword [rsp+8], 0x98badcfe     ; C
+  mov dword [rsp+12], 0x10325476    ; D
+
+main_loop_start:
+  mov rax, 0            ; Zero out the input array
+  mov [rsp+16], rax         
   mov [rsp+24], rax
   mov [rsp+32], rax
   mov [rsp+40], rax
   mov [rsp+48], rax
   mov [rsp+56], rax
+  mov [rsp+64], rax
+  mov [rsp+72], rax
+  mov [rsp+80], rax
+  mov [rsp+88], rax
+  mov [rsp+96], rax
+  mov [rsp+104], rax
+  mov [rsp+112], rax
+  mov [rsp+120], rax
+  mov [rsp+128], rax
+  mov [rsp+136], rax
 
-  mov rax, 0x2000003    ; Call read(STDIN, &rsp, 55)
+  mov rax, 0x2000003    ; Call read(STDIN, &rsp, 64)
   mov rdi, 0
-  mov rsi, rsp
-  mov rdx, 55
+  lea rsi, [rsp+16]
+  mov rdx, 64
   syscall
 
-  call calc_md5        ; Hash these 55 bytes
+  lea rdi, [rsp+16]          ; rdi holds the pointer to the input we've read
 
-  ; The hash is contained the the final 16 bytes of the stack
+  ; If we've read less than 64 bytes, this is the last chunk.
+  ; We need to pad this chunk.
+  cmp rax, 64
+  jl main_last_chunk
+
+main_call_md5:
+  mov rsi, rdi
+  call md5_chunk
+  jmp main_loop_start
+
+main_last_chunk:
+  ; Apply padding to the last chunk.
+  ; This may spill over into a second chunk.
+  lea rdi, [rsp+16]
+  mov rsi, rax
+  call md5_pad
+
+  ; If the new array length is > 64 bytes then the padding has spilled into a second chunk,
+  ; so we need to run md5 twice.
+  cmp rax, 64
+  jle main_last_chunk_single
+
+  mov rsi, rdi
+  call md5_chunk
+  call md5_chunk
+  jmp main_end
+
+main_last_chunk_single:
+
+  mov rsi, rdi
+  lea rdx, [rsp+128]
+  call md5_chunk
+
+main_end:
+  ; Store the MD5 hash
+  sub rsp, 16           ; Allocate 16 bytes for the md5 hash.
+  mov [rsp], ecx
+  mov [rsp+4], r15d
+  mov [rsp+8], r8d
+  mov [rsp+16], r9d
+
   mov rdi, rsp
   mov rsi, 16
   call _print_hex
 
-  add rsp, 64          ; Restore the stack
+  add rsp, 176          ; Restore the stack
 
   jmp _exit
 
@@ -71,22 +133,11 @@ main:
 ; Any unused capacity in the array should be zeroed out.
 ; The returned value is the new length of the array.
 md5_pad:
-  ; Some examples:
-  ; old length | new length | old length % 64
-  ; 0          | 56         | 0
-  ; 1          | 56         | 1
-  ; 55         | 56         | 55
-  ; 56         | 124        | 56
-  ; 64         | 124        | 0
-  ; 123        | 124        | 59
-  ; 124        | 188        | 60
-  ; 128        | 188        | 0
-  ; 187        | 188        | 59
-  ; 188        | 252        | 60
+  mov rcx, rsi          ; Save the original array length
 
   ; First, we add the mandatory byte 0x80 to the end of the array. This is required regardless of
   ; the length of the array.
-  mov [rdi + rsi], 0x80
+  mov byte [rdi + rsi], 0x80
 
   ; sil (low byte of rsi) = length % 256
   ; so if we mask off the top two bits, we get length % 64
@@ -103,48 +154,35 @@ md5_pad:
   
 md5_pad_padding:
   ; The distance to the next multiple is 64 - (length % 64)
-  ; We want to extend by this amount less 9 bytes, so 64 - (length % 64) - 9 = 55 - (length % 64)
+  ; Extend the length by this amount
   neg dl                ; 0 - (length % 64)
-  and dl, 0x3F          ; Mask out the top two bits again (i.e. apply % 64)
-  add dl, 55            ; 0 - (length % 64) + 55 = 55 - (length % 64)
+  add dl, 64            ; 0 - (length % 64) + 64 = 64 - (length % 64)
   add sil, dl
+
+  ; Now store the (original) array length as a u64 in the last 8 bytes of the array.
+  mov [rdi + rsi - 8], rcx
 
   ; We're done.
   mov rax, rsi
   ret
 
-; Calculate the MD5 hash of 55 bytes, stored on the stack.
-; The MD5 block size is 64 bytes, so we just need to hash a single block.
-; Our input is a 64 byte block of which the first 55 contain our input.
-; This leaves room for some required padding.
-
-; calc_md5(chunk: [u8; 64])
-;          rsi
-calc_md5:
-; First, we append 0x80
-  mov al, 0x80
-  mov [rsi+55], al
-; We don't need any further padding
-; We then add the original message length in bits (55 * 8 = 440), as a u64
-  mov rax, 440
-  mov [rsi+56], rax
-; We now have a pre-processed 64 byte block
-; We treat it as 16 32-bit words
-
-; Initialise some variables
-; a = 0x67452301
-; b = 0xefcdab89
-; c = 0x98badcfe
-; d = 0x10325476
-
+; Calculate the MD5 hash of a 64 byte chunk, stored on the stack.
+; We assume the chunk has been padded if necessary.
+; md5_chunk(chunk: [u8; 64], a: u32, b: u32, c: u32, d: u32)
+;          rsi               rsp+8   rsp+12  rsp+16  rsp+20
+md5_chunk:
 ; a = ecx
-  mov ecx, 0x67452301
+  xor rcx, rcx
+  mov ecx, [rsp+8]
 ; b = r15d
-  mov r15d, 0xefcdab89
+  xor r15, r15
+  mov r15d, [rsp+12]
 ; c = r8d
-  mov r8d, 0x98badcfe
+  xor r8, r8
+  mov r8d, [rsp+16]
 ; d = r9d
-  mov r9d, 0x10325476
+  xor r9, r9
+  mov r9d, [rsp+20]
 
 ; for i in 0 to 63:
 ; r10 = i
@@ -276,17 +314,19 @@ _calc_md5_loop_final:
   jl _calc_md5_loop_start
 
 _calc_md5_loop_end:
-  ; (note: for multiple chunks there's an extra step here, check wiki)
-  ; digest = a append b append c append d
-  ; write digest to the final 16 bytes of the chunk
-  mov [rsi], ecx
-  mov [rsi+4], r15d
-  mov [rsi+8], r8d
-  mov [rsi+16], r9d
+  ; a = a + A
+  ; b = b + B
+  ; c = c + C
+  ; d = d + D
+  add [rsp+8], ecx
+  add [rsp+12], r15d
+  add [rsp+16], r8d
+  add [rsp+20], r9d
+  
   ret
 
 ; void print_hex(char: [u8], len: u64)
-;                     rdi         rsi
+;                rdi         rsi
 _print_hex:
 ; Save the position of the last char
   mov r8, rdi
